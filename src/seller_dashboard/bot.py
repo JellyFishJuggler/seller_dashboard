@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
+from langchain_sarvam import ChatSarvam
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
@@ -80,10 +81,16 @@ tools = [
 
 # Local Ollama. Qwen is the default; another installed Ollama model can be
 # selected with OLLAMA_MODEL without changing providers.
-llm = ChatOllama(
-    model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
-    temperature=0.0,
+# llm = ChatOllama(
+#     model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+#     temperature=0.0,
+# )
+
+llm = ChatSarvam(
+    model='sarvam-105b',
+    temperature=0.7
 )
+
 
 
 def build_graph():

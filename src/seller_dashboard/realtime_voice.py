@@ -30,7 +30,7 @@ BLOCK_SIZE = 1600  # 100 ms of audio
 
 def process_seller_message(transcript: str, tts_client: SarvamAI) -> None:
     """Send one transcript to LangGraph, synthesize the reply, and play it."""
-    print("\n🤖 Thinking...")
+    print("\nThinking...")
 
     result = graph.invoke(
         {"messages": [HumanMessage(content=transcript)]},
@@ -98,7 +98,7 @@ async def main():
         silence_duration_ms="800",
     ) as ws:
         print("Connected!")
-        print("\n🎙️ Listening... Speak naturally. (Ctrl+C to stop)\n")
+        print("\nListening... Speak naturally. (Ctrl+C to stop)\n")
 
         async def send_audio():
             while not stop_event.is_set():
@@ -108,6 +108,10 @@ async def main():
                         timeout=0.2,
                     )
                 except asyncio.TimeoutError:
+                    silence = bytes(BLOCK_SIZE * 2)
+
+                    encoded_audio = base64.b64encode(silence).decode("utf-8")
+                    await ws.send_realtime_audio_input(RealtimeAudioInput(audio=encoded_audio))
                     continue
 
                 encoded_audio = base64.b64encode(chunk).decode("utf-8")
@@ -180,7 +184,10 @@ async def main():
             except asyncio.CancelledError:
                 pass
 
-            await ws.send_realtime_end(RealtimeEnd())
+            try:
+                await ws.send_realtime_end(RealtimeEnd())
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

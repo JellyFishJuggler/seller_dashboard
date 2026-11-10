@@ -13,6 +13,9 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from langchain_core.prompts import ChatPromptTemplate
+from seller_dashboard.rag import RAGRetriever, get_retriever
+
 from typing_extensions import TypedDict
 
 from seller_dashboard.tools import (
@@ -112,6 +115,34 @@ helpful female account manager who understands their business.
 Be conversational first, analytical second.
 """
 
+prompt = ChatPromptTemplate.from_template("""
+Use this retrieved knowledge-base context as general guidance for the
+seller's current question. It is not live or seller-specific data. Prefer
+tool results and the conversation for seller-specific facts. If the context
+is irrelevant, do not force it into the answer.
+
+Current question: {question}
+
+Retrieved context:
+{context}
+""")
+
+_rag_retriever: RAGRetriever | None = None
+
+
+def generate_formatted_prompt(question: str) -> str:
+    global _rag_retriever
+    if _rag_retriever is None:
+        _rag_retriever = get_retriever()
+
+    docs = _rag_retriever.retrieve(question, k=5)
+    context = "\n\n".join(doc["content"] for doc in docs)
+
+    return prompt.invoke({
+        "context": context or "No relevant knowledge-base context was found.",
+        "question": question,
+    }).to_string()
+
 
 load_dotenv()
 
@@ -151,7 +182,21 @@ def build_graph():
     def chatbot(state: State):
         # The system prompt is added for each model call but not written into the
         # checkpointed conversation history, so it is not duplicated every turn.
-        messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
+        latest_question = next(
+            (
+                message.content
+                for message in reversed(state["messages"])
+                if isinstance(message, HumanMessage)
+                and isinstance(message.content, str)
+            ),
+            None,
+        )
+        messages = [SystemMessage(content=SYSTEM_PROMPT)]
+        if latest_question:
+            messages.append(
+                SystemMessage(content=generate_formatted_prompt(latest_question))
+            )
+        messages.extend(state["messages"])
         response = model.invoke(messages)
 
         return {

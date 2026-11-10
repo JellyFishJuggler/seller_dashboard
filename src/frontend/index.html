@@ -3,64 +3,86 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f7fb">
-  <title>Seller Assistant</title>
+  <meta name="theme-color" content="#fbf8f8">
+  <title>Snapdeal Seller Assistant</title>
   <link rel="stylesheet" href="style.css">
   <script src="index.js" defer></script>
 </head>
 <body>
   <main class="app-shell">
-    <aside class="side-panel">
-      <a class="brand" href="#" aria-label="Seller Assistant home">
-        <span class="brand-mark">S</span>
-        <span>seller<span class="brand-light">desk</span></span>
-      </a>
-      <div class="side-copy">
-        <span class="eyebrow">SELLER SUPPORT</span>
-        <h1>Your business,<br>in conversation.</h1>
-        <p>Ask about performance, inventory, orders, and the next steps for your store.</p>
-      </div>
-      <div class="side-footer"><span class="status-dot"></span> Assistant ready</div>
-    </aside>
-
-    <section class="chat-panel" aria-label="Seller assistant chat">
-      <header class="chat-header">
-        <div class="assistant-avatar" aria-hidden="true">✳</div>
-        <div class="header-copy"><strong>Seller Assistant</strong><span><i class="status-dot"></i> Here to help</span></div>
-        <button class="new-chat" id="new-chat" type="button" title="Start a new conversation">＋ <span>New chat</span></button>
-      </header>
-
-      <div class="conversation" id="conversation" aria-live="polite" aria-label="Messages">
-        <div class="welcome-block">
-          <span class="welcome-icon" aria-hidden="true">✳</span>
-          <h2>Let’s get started.</h2>
-          <p>Your seller data is just a question away.</p>
-        </div>
-        <div class="message-row assistant-row">
-          <div class="message-avatar" aria-hidden="true">✳</div>
-          <div class="message assistant-message">Hi! To get started, what’s your seller ID or unique ID?</div>
+    <header class="topbar">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <div class="brand-copy">
+          <h1>Seller Assistant</h1>
+          <p>Your AI-powered seller companion</p>
         </div>
       </div>
 
-      <footer class="composer-area">
-        <div class="voice-bar" aria-label="Voice assistant controls">
-          <div class="voice-state">
-            <span class="voice-indicator" id="voice-indicator"></span>
-            <span id="voice-status" role="status">Voice is off</span>
-          </div>
-          <div class="voice-actions">
-            <button class="voice-button" id="start-voice" type="button">Start voice</button>
-            <button class="voice-button end-voice" id="end-voice" type="button" disabled>End call</button>
-          </div>
-          <div class="live-transcript" id="live-transcript" aria-live="polite" hidden></div>
+      <div class="header-tools">
+        <div class="connection" id="connection-status" data-state="idle">
+          <span class="connection-dot"></span><span id="connection-label">Voice ready</span>
         </div>
-        <form id="chat-form" class="composer">
-          <textarea id="message-input" rows="1" placeholder="Enter your seller ID…" aria-label="Message" autofocus></textarea>
-          <button class="send-button" id="send-button" type="submit" aria-label="Send message" title="Send message"><span aria-hidden="true">↑</span></button>
-        </form>
-        <div class="composer-hint"><span id="input-hint">Your seller ID connects the assistant to your store.</span><span>Enter to send <kbd>↵</kbd></span></div>
-      </footer>
+        <div class="seller-selector">
+          <label for="seller-id-input">Seller ID</label>
+          <input id="seller-id-input" type="text" placeholder="Enter seller ID" autocomplete="off">
+          <button class="load-seller" id="load-seller" type="button">Load</button>
+        </div>
+        <button class="new-session" id="new-chat" type="button"><span aria-hidden="true">＋</span> New session</button>
+      </div>
+    </header>
+
+    <section class="kpi-grid" aria-label="Seller performance summary">
+      <article class="kpi-card">
+        <div class="kpi-topline"><span>Total sales</span><span class="kpi-icon sales-icon" aria-hidden="true">₹</span></div>
+        <strong class="kpi-value" id="sales-value">—</strong>
+        <span class="kpi-change" id="sales-change">Load a seller to view metrics</span>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-topline"><span>Total orders</span><span class="kpi-icon orders-icon" aria-hidden="true">▤</span></div>
+        <strong class="kpi-value" id="orders-value">—</strong>
+        <span class="kpi-change" id="orders-change">Monthly total</span>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-topline"><span>Average selling price</span><span class="kpi-icon price-icon" aria-hidden="true">↗</span></div>
+        <strong class="kpi-value" id="price-value">—</strong>
+        <span class="kpi-change" id="price-change">Monthly average</span>
+      </article>
     </section>
+
+    <section class="voice-layout" aria-label="Voice assistant">
+      <section class="voice-stage voice-bar" aria-labelledby="voice-heading">
+        <div class="voice-eyebrow"><span class="eyebrow-mark">✳</span> YOUR SELLER ASSISTANT</div>
+        <h2 id="voice-heading">How can I help your<br class="desktop-break"> business today?</h2>
+        <p class="voice-description">Ask about your sales, orders, inventory, or business growth.</p>
+
+        <button class="mic-button" id="start-voice" type="button" aria-label="Start voice conversation" title="Start voice conversation">
+          <span class="mic-halo"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5a3.5 3.5 0 0 0 3.5 3.5Z"/><path d="M19 10.5v.5a7 7 0 0 1-14 0v-.5M12 18v4m-4 0h8"/></svg>
+        </button>
+        <p class="mic-prompt" id="voice-status" role="status" aria-live="polite">Tap to start speaking</p>
+        <div class="live-transcript" id="live-transcript" aria-live="polite" hidden></div>
+
+        <div class="voice-actions">
+          <button class="end-call" id="end-voice" type="button" disabled><span class="end-call-icon" aria-hidden="true">■</span> End call</button>
+        </div>
+      </section>
+
+      <section class="transcript-panel" aria-label="Conversation transcript">
+        <div class="transcript-header">
+          <div><span class="transcript-overline">CONVERSATION</span><h2>Transcript</h2></div>
+          <span class="transcript-live" id="transcript-live"><i></i> Ready</span>
+        </div>
+        <div class="conversation" id="conversation" aria-live="polite" aria-label="Conversation messages">
+          <div class="transcript-empty" id="transcript-empty">
+            <span class="empty-icon" aria-hidden="true">◌</span>
+            <p>Your conversation will appear here.</p>
+            <span>Start speaking to ask your first question.</span>
+          </div>
+        </div>
+      </section>
+    </section>
+    <footer class="page-footer"><span class="footer-spark" aria-hidden="true">✳</span> Built for your business, ready when you are.</footer>
   </main>
 </body>
 </html>

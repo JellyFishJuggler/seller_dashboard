@@ -1,20 +1,19 @@
 const API_URL = localStorage.getItem('seller-assistant-api-url') || 'http://127.0.0.1:8000';
-const form = document.querySelector('#chat-form');
-const input = document.querySelector('#message-input');
 const conversation = document.querySelector('#conversation');
-const sendButton = document.querySelector('#send-button');
-const hint = document.querySelector('#input-hint');
 const newChatButton = document.querySelector('#new-chat');
 const voiceBar = document.querySelector('.voice-bar');
 const voiceStatus = document.querySelector('#voice-status');
 const liveTranscript = document.querySelector('#live-transcript');
 const startVoiceButton = document.querySelector('#start-voice');
 const endVoiceButton = document.querySelector('#end-voice');
+const connectionStatus = document.querySelector('#connection-status');
+const connectionLabel = document.querySelector('#connection-label');
+const transcriptLive = document.querySelector('#transcript-live');
+const sellerIdInput = document.querySelector('#seller-id-input');
+const loadSellerButton = document.querySelector('#load-seller');
 
-let sellerId = '';
+let sellerId = localStorage.getItem('seller-assistant-seller-id') || '';
 let sessionId = createSessionId();
-let waitingForSellerId = true;
-let busy = false;
 let voiceSocket = null;
 let voiceStream = null;
 let voiceAudioContext = null;
@@ -46,34 +45,42 @@ function scrollToLatest() {
 function setVoiceState(state, message) {
   voiceBar.dataset.state = state;
   voiceStatus.textContent = message;
+  connectionStatus.dataset.state = state;
+  transcriptLive.dataset.state = state;
+  const labels = {
+    idle: ['Voice ready', 'Ready'],
+    connecting: ['Connecting…', 'Connecting'],
+    listening: ['Voice connected', 'Listening'],
+    processing: ['Voice connected', 'Thinking'],
+    speaking: ['Voice connected', 'Speaking'],
+    error: ['Connection issue', 'Issue'],
+  };
+  const [connectionText, transcriptText] = labels[state] || labels.idle;
+  connectionLabel.textContent = connectionText;
+  transcriptLive.lastChild.textContent = ` ${transcriptText}`;
 }
 
 function addMessage(text, who, extraClass = '') {
+  document.querySelector('#transcript-empty')?.remove();
   const row = document.createElement('div');
   row.className = `message-row ${who === 'assistant' ? 'assistant-row' : 'user-row'}`;
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
   avatar.setAttribute('aria-hidden', 'true');
-  avatar.textContent = who === 'assistant' ? '✳' : 'You';
+  avatar.textContent = who === 'assistant' ? 'AI' : 'You';
+  const content = document.createElement('div');
+  content.className = 'message-content';
+  const label = document.createElement('div');
+  label.className = 'message-label';
+  label.textContent = who === 'assistant' ? 'Seller Assistant' : 'You';
   const bubble = document.createElement('div');
   bubble.className = `message ${who === 'assistant' ? 'assistant-message' : ''} ${extraClass}`.trim();
   bubble.textContent = text;
-  row.append(avatar, bubble);
+  content.append(label, bubble);
+  row.append(avatar, content);
   conversation.append(row);
   scrollToLatest();
   return bubble;
-}
-
-function setBusy(value) {
-  busy = value;
-  sendButton.disabled = value;
-  input.disabled = value;
-  sendButton.setAttribute('aria-label', value ? 'Waiting for response' : 'Send message');
-}
-
-function resizeInput() {
-  input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 130)}px`;
 }
 
 function sendVoicePcm(pcm) {
@@ -410,85 +417,84 @@ function finishVoiceTurn() {
   if (voiceActive) setVoiceState('listening', 'Listening…');
 }
 
-async function sendQuery(query) {
-  setBusy(true);
-  const bubble = addMessage('Thinking', 'assistant', 'typing');
-  try {
-    const response = await fetch(`${API_URL.replace(/\/$/, '')}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, seller_id: sellerId, message: query }),
-    });
-    let data;
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error(`The API returned an unreadable response (HTTP ${response.status}).`);
-    }
-    if (!response.ok) {
-      const detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
-      throw new Error(detail || `Request failed (HTTP ${response.status}).`);
-    }
-    bubble.classList.remove('typing');
-    bubble.textContent = data.message || 'I didn’t receive a response. Please try again.';
-  } catch (error) {
-    bubble.classList.remove('typing');
-    bubble.classList.add('error-message');
-    bubble.textContent = `${error.message || 'Could not reach the API.'} Make sure the Seller API is running at ${API_URL}.`;
-  } finally {
-    setBusy(false);
-    input.focus();
-    scrollToLatest();
-  }
+function formatPercent(value) {
+  const percentage = Number(value);
+  if (!Number.isFinite(percentage)) return 'Change unavailable';
+  return `${percentage > 0 ? '+' : ''}${percentage.toFixed(1)}% vs. last month`;
 }
 
-form.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (busy) return;
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  resizeInput();
-  addMessage(text, 'user');
+function showMetricChange(element, value) {
+  const percentage = Number(value);
+  element.textContent = formatPercent(value);
+  element.classList.toggle('positive', Number.isFinite(percentage) && percentage > 0);
+  element.classList.toggle('negative', Number.isFinite(percentage) && percentage < 0);
+}
 
-  if (waitingForSellerId) {
-    sellerId = text;
-    waitingForSellerId = false;
-    input.placeholder = 'Ask about your store…';
-    hint.textContent = `Connected for this chat as ${sellerId}. Ask a question about your store.`;
-    addMessage(`Thanks! I’m ready to help with seller ${sellerId}. What would you like to know?`, 'assistant');
+async function loadSellerMetrics() {
+  const requestedSellerId = sellerIdInput.value.trim();
+  if (!requestedSellerId) {
+    setVoiceState('error', 'Enter a seller ID to load your account metrics.');
+    sellerIdInput.focus();
     return;
   }
 
-  await sendQuery(text);
-});
+  sellerId = requestedSellerId;
+  localStorage.setItem('seller-assistant-seller-id', sellerId);
+  loadSellerButton.disabled = true;
+  loadSellerButton.textContent = 'Loading…';
+  try {
+    const response = await fetch(`${API_URL.replace(/\/$/, '')}/dashboard/${encodeURIComponent(sellerId)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.message || data.error || `Could not load seller metrics (HTTP ${response.status}).`);
+    }
 
-input.addEventListener('input', resizeInput);
-input.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    form.requestSubmit();
+    document.querySelector('#sales-value').textContent = data.this_month?.sales_display || '—';
+    document.querySelector('#orders-value').textContent = Number.isFinite(Number(data.this_month?.orders))
+      ? Number(data.this_month.orders).toLocaleString('en-IN') : '—';
+    document.querySelector('#price-value').textContent = data.this_month?.avg_selling_price_display || '—';
+    showMetricChange(document.querySelector('#sales-change'), data.changes?.sales_pct);
+    showMetricChange(document.querySelector('#orders-change'), data.changes?.orders_pct);
+    showMetricChange(document.querySelector('#price-change'), data.changes?.avg_selling_price_pct);
+    sellerIdInput.value = data.seller_id || sellerId;
+    setVoiceState(voiceActive ? 'listening' : 'idle', `Account loaded: ${data.seller_id || sellerId}`);
+  } catch (error) {
+    document.querySelector('#sales-value').textContent = '—';
+    document.querySelector('#orders-value').textContent = '—';
+    document.querySelector('#price-value').textContent = '—';
+    document.querySelector('#sales-change').textContent = error.message || 'Could not load seller metrics';
+    document.querySelector('#orders-change').textContent = 'Check the seller ID and try again';
+    document.querySelector('#price-change').textContent = 'Dashboard connection unavailable';
+    setVoiceState('error', error.message || 'Could not load seller metrics.');
+  } finally {
+    loadSellerButton.disabled = false;
+    loadSellerButton.textContent = 'Load';
   }
-});
+}
 
-newChatButton.addEventListener('click', () => {
+function clearTranscript() {
+  conversation.replaceChildren();
+  const empty = document.createElement('div');
+  empty.className = 'transcript-empty';
+  empty.id = 'transcript-empty';
+  empty.innerHTML = '<span class="empty-icon" aria-hidden="true">◌</span><p>Your conversation will appear here.</p><span>Start speaking to ask your first question.</span>';
+  conversation.append(empty);
+}
+
+function startNewSession() {
   endVoice();
   sessionId = createSessionId();
-  sellerId = '';
-  waitingForSellerId = true;
-  conversation.replaceChildren();
+  clearTranscript();
+  liveTranscript.hidden = true;
+  setVoiceState('idle', 'Tap to start speaking');
+}
 
-  const welcome = document.createElement('div');
-  welcome.className = 'welcome-block';
-  welcome.innerHTML = '<span class="welcome-icon" aria-hidden="true">✳</span><h2>Let’s get started.</h2><p>Your seller data is just a question away.</p>';
-  conversation.append(welcome);
-  addMessage('Hi! To get started, what’s your seller ID or unique ID?', 'assistant');
-  input.placeholder = 'Enter your seller ID…';
-  hint.textContent = 'Your seller ID connects the assistant to your store.';
-  input.value = '';
-  resizeInput();
-  input.focus();
+sellerIdInput.value = sellerId;
+if (sellerId) loadSellerMetrics();
+loadSellerButton.addEventListener('click', loadSellerMetrics);
+sellerIdInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') loadSellerMetrics();
 });
-
+newChatButton.addEventListener('click', startNewSession);
 startVoiceButton.addEventListener('click', startVoice);
 endVoiceButton.addEventListener('click', endVoice);

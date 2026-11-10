@@ -1,0 +1,25 @@
+[project]
+name = "seller-dashboard"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "JellyFishJuggler", email = "guptasrijan85@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "langchain>=1.4.9",
+    "langchain-ollama>=1.1.0",
+    "langchain-sarvam>=0.1.2",
+    "langgraph>=1.2.20",
+    "python-dotenv>=1.2.4",
+    "sarvamai>=0.1.45",
+]
+
+[project.scripts]
+seller-dashboard = "seller_dashboard:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"

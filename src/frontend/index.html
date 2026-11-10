@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <title>Seller Assistant</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="index.js" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="side-panel">
+      <a class="brand" href="#" aria-label="Seller Assistant home">
+        <span class="brand-mark">S</span>
+        <span>seller<span class="brand-light">desk</span></span>
+      </a>
+      <div class="side-copy">
+        <span class="eyebrow">SELLER SUPPORT</span>
+        <h1>Your business,<br>in conversation.</h1>
+        <p>Ask about performance, inventory, orders, and the next steps for your store.</p>
+      </div>
+      <div class="side-footer"><span class="status-dot"></span> Assistant ready</div>
+    </aside>
+
+    <section class="chat-panel" aria-label="Seller assistant chat">
+      <header class="chat-header">
+        <div class="assistant-avatar" aria-hidden="true">✳</div>
+        <div class="header-copy"><strong>Seller Assistant</strong><span><i class="status-dot"></i> Here to help</span></div>
+        <button class="new-chat" id="new-chat" type="button" title="Start a new conversation">＋ <span>New chat</span></button>
+      </header>
+
+      <div class="conversation" id="conversation" aria-live="polite" aria-label="Messages">
+        <div class="welcome-block">
+          <span class="welcome-icon" aria-hidden="true">✳</span>
+          <h2>Let’s get started.</h2>
+          <p>Your seller data is just a question away.</p>
+        </div>
+        <div class="message-row assistant-row">
+          <div class="message-avatar" aria-hidden="true">✳</div>
+          <div class="message assistant-message">Hi! To get started, what’s your seller ID or unique ID?</div>
+        </div>
+      </div>
+
+      <footer class="composer-area">
+        <div class="voice-bar" aria-label="Voice assistant controls">
+          <div class="voice-state">
+            <span class="voice-indicator" id="voice-indicator"></span>
+            <span id="voice-status" role="status">Voice is off</span>
+          </div>
+          <div class="voice-actions">
+            <button class="voice-button" id="start-voice" type="button">Start voice</button>
+            <button class="voice-button end-voice" id="end-voice" type="button" disabled>End call</button>
+          </div>
+          <div class="live-transcript" id="live-transcript" aria-live="polite" hidden></div>
+        </div>
+        <form id="chat-form" class="composer">
+          <textarea id="message-input" rows="1" placeholder="Enter your seller ID…" aria-label="Message" autofocus></textarea>
+          <button class="send-button" id="send-button" type="submit" aria-label="Send message" title="Send message"><span aria-hidden="true">↑</span></button>
+        </form>
+        <div class="composer-hint"><span id="input-hint">Your seller ID connects the assistant to your store.</span><span>Enter to send <kbd>↵</kbd></span></div>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>

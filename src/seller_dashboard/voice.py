@@ -1,83 +1,74 @@
 
-from sarvamai import SarvamAI
-from langchain_core.messages import HumanMessage
-import sounddevice as sd
-import soundfile as sf
-from seller_dashboard.bot import graph
-from dotenv import load_dotenv
-import uuid
-import os
 import base64
-import time
+import os
 
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
+from sarvamai import AsyncSarvamAI, SarvamAI, RealtimeAudioInput
+
+from seller_dashboard.bot import graph
 
 load_dotenv()
 
-client = SarvamAI(
-    api_subscription_key=os.getenv("SARVAM_API_KEY")
-)
+API_KEY = os.getenv("SARVAM_API_KEY")
 
-THREAD_ID = str(uuid.uuid4())
+SAMPLE_RATE = 16000
 
-# 1. Speech to Text
-print("\n[1/4] Processing your audio...")
 
-with open("input.wav", "rb") as audio_file:
-    response = client.speech_to_text.transcribe(
-        file=audio_file,
-        model="saaras:v4",
-        mode="transcribe"
-    )
+class VoiceAssistant:
 
-transcript = response.transcript
+    def __init__(self):
+        if not API_KEY:
+            raise ValueError("SARVAM_API_KEY not found in .env")
 
-print("\nYou:", transcript)
-print("\n[2/4] STT completed. Sending to AI...")
+        self.stt_client = AsyncSarvamAI(
+            api_subscription_key=API_KEY
+        )
 
-# 2. LangGraph + Ollama
+        self.tts_client = SarvamAI(
+            api_subscription_key=API_KEY
+        )
 
-start_time = time.time()
-result = graph.invoke(
-    {"messages": [HumanMessage(content=transcript)]},
-    config={
-        "configurable": {
-            "thread_id": THREAD_ID
-        }
-    }
-)
+    def generate_response(self, transcript: str, session_id: str) -> str:
+        """Send transcript to LangGraph and return its response."""
 
-print(f"[DEBUG] Graph completed in {time.time() - start_time:.2f} seconds")
+        result = graph.invoke(
+            {"messages": [HumanMessage(content=transcript)]},
+            config={
+                "configurable": {
+                    "thread_id": session_id
+                }
+            },
+        )
 
-assistant_reply = result["messages"][-1].content
+        return result["messages"][-1].content
 
-print("\n[3/4] AI response generated.")
-print("\nAssistant:", assistant_reply)
+    def generate_audio(self, text: str) -> bytes:
+        """Convert assistant response into audio bytes."""
 
-# 3. Text to Speech
-print("\nGenerating voice response...")
+        audio = self.tts_client.text_to_speech.convert(
+            text=text,
+            model="bulbul:v4-flash",
+            language_code="hi-IN",
+            speaker="ritu_hi_sales",
+        )
 
-audio = client.text_to_speech.convert(
-    text=assistant_reply,
-    model="bulbul:v4-flash",
-    language_code="hi-IN",
-    speaker="ritu_hi_sales"
-)
+        audio_bytes = base64.b64decode(
+            "".join(audio.audios)
+        )
 
-print("[4/4] TTS completed.")
+        return audio_bytes
 
-# 4. Save generated audio
-audio_bytes = base64.b64decode("".join(audio.audios))
+    def connect_stt(self):
+        """Create a Sarvam realtime STT connection."""
 
-with open("response.wav", "wb") as output_file:
-    output_file.write(audio_bytes)
-
-print("\nVoice response saved as response.wav")
-
-print("\nPlaying AI response...")
-
-data, samplerate = sf.read("response.wav")
-
-sd.play(data, samplerate)
-sd.wait()
-
-print("Playback completed.")
+        return self.stt_client.speech_to_text_realtime_streaming.connect(
+            model="saaras:v4",
+            language_code="hi-IN",
+            mode="transcribe",
+            stream_type="fast",
+            endpointing="vad",
+            encoding="linear16",
+            sample_rate=str(SAMPLE_RATE),
+            silence_duration_ms="800",
+        )

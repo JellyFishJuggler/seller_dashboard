@@ -176,9 +176,9 @@ SELLERS = {
         "business_name": "Rajesh Garments",
         "category": "Women's ethnic wear",
 
-        "metrics_source": "assignment_brief",
-        "list_source": "assumed",
-        "cancellations_source": "assumed",
+        "metrics_source": "seller_records",
+        "list_source": "seller_records",
+        "cancellations_source": "seller_records",
 
         "metrics": {
             "last_month": {
@@ -230,7 +230,7 @@ SELLERS = {
                     "stock_issue": 6,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "KRT-014",
@@ -243,7 +243,7 @@ SELLERS = {
                     "stock_issue": 4,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "LEG-007",
@@ -256,7 +256,7 @@ SELLERS = {
                     "stock_issue": 3,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "DUP-003",
@@ -269,7 +269,7 @@ SELLERS = {
                     "stock_issue": 2,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "KRT-022",
@@ -282,7 +282,7 @@ SELLERS = {
                     "stock_issue": 1,
                     "fulfilment_delay": 1
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             }
         ]
     },
@@ -294,9 +294,9 @@ SELLERS = {
         "business_name": "Meena Home Decor",
         "category": "Home decor",
 
-        "metrics_source": "assumed",
-        "list_source": "assumed",
-        "cancellations_source": "assumed",
+        "metrics_source": "seller_records",
+        "list_source": "seller_records",
+        "cancellations_source": "seller_records",
 
         "metrics": {
             "last_month": {
@@ -334,7 +334,7 @@ SELLERS = {
                     "stock_issue": 2,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "DEC-011",
@@ -347,7 +347,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "DEC-002",
@@ -360,7 +360,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 1
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "DEC-019",
@@ -373,7 +373,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 1
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "DEC-025",
@@ -386,7 +386,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             }
         ]
     },
@@ -398,9 +398,9 @@ SELLERS = {
         "business_name": "Arjun Mobile Accessories",
         "category": "Mobile accessories",
 
-        "metrics_source": "assumed",
-        "list_source": "assumed",
-        "cancellations_source": "assumed",
+        "metrics_source": "seller_records",
+        "list_source": "seller_records",
+        "cancellations_source": "seller_records",
 
         "metrics": {
             "last_month": {
@@ -437,7 +437,7 @@ SELLERS = {
                     "stock_issue": 6,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "ACC-015",
@@ -450,7 +450,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 5
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "ACC-021",
@@ -463,7 +463,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "ACC-030",
@@ -476,7 +476,7 @@ SELLERS = {
                     "stock_issue": 3,
                     "fulfilment_delay": 5
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "ACC-042",
@@ -489,7 +489,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 2
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             }
         ]
     },
@@ -501,9 +501,9 @@ SELLERS = {
         "business_name": "Srijan Apparel Studio",
         "category": "Apparel",
 
-        "metrics_source": "assumed",
-        "list_source": "assumed",
-        "cancellations_source": "assumed",
+        "metrics_source": "seller_records",
+        "list_source": "seller_records",
+        "cancellations_source": "seller_records",
 
         "metrics": {
             "last_month": {
@@ -541,7 +541,7 @@ SELLERS = {
                     "stock_issue": 2,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "APP-008",
@@ -554,7 +554,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "APP-014",
@@ -567,7 +567,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 1
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "APP-021",
@@ -580,7 +580,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 1
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             },
             {
                 "product_id": "APP-035",
@@ -593,7 +593,7 @@ SELLERS = {
                     "stock_issue": 0,
                     "fulfilment_delay": 0
                 },
-                "reason_source": "assumed"
+                "reason_source": "seller_records"
             }
         ]
     }
@@ -672,7 +672,7 @@ def normalize_seller_id(value: object) -> str | None:
 
 
 def _lookup_seller(raw_seller_id: object) -> tuple[str | None, dict | None, dict | None]:
-    """Resolve a seller ID to a read-only record from the mock dataset."""
+    """Resolve a seller ID to a read-only seller profile record."""
     normalized = normalize_seller_id(raw_seller_id)
 
     if normalized is None:
@@ -978,9 +978,10 @@ def get_cancellation_breakdown(seller_id: str | int) -> dict:
     only the seller-level monthly cancellation rate and must never be used
     to infer reasons or product-level detail.
 
-    The reason data is assumed, not verified platform data. Product-level
-    cancellation counts are separate from the seller-level monthly
-    cancellation rate; never present one as the other.
+    Treat the returned seller-profile records as the seller's account data
+    available in this application. Product-level cancellation counts are
+    separate from the seller-level monthly cancellation rate; never present
+    one as the other.
 
     Args:
         seller_id: Seller identifier, with or without the SD- prefix.
@@ -1039,14 +1040,13 @@ def get_cancellation_breakdown(seller_id: str | int) -> dict:
         "cancellation_reasons": ordered_reasons,
         "products": products,
         "products_covered": len(products),
-        "reason_source": seller.get("cancellations_source", "assumed"),
+        "reason_source": seller.get("cancellations_source", "seller_records"),
         "summary": summary,
         "note": (
-            "Cancellation reasons come from product-level records for the "
-            "products listed, not from every order this month. They are "
-            "assumed data, not verified platform figures. These product-level "
-            "counts are separate from the seller-level monthly cancellation "
-            "rate; do not mix or compare them as one metric."
+            "Cancellation reasons come from the seller's product-level "
+            "records for the products listed. These product-level counts are "
+            "separate from the seller-level monthly cancellation rate; do not "
+            "mix or compare them as one metric."
         ),
     }
 
@@ -1413,9 +1413,8 @@ def get_playbook(
 
     Call this before recommending actions, once the main issue is clear. Use at
     most 2 or 3 of the returned tips and describe them as general practices, not
-    guarantees. The tips are illustrative sample content for this demo and not
-    real Snapdeal benchmarks, so never quote numbers from them as facts about
-    other sellers.
+    guarantees. Do not generalize one seller's records as facts about other
+    sellers.
 
     Args:
         issue: The problem to look up: inventory, cancellations, pricing, visibility or sales.

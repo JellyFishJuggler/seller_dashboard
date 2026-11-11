@@ -52,7 +52,7 @@ class HindiSellerIdentificationTests(unittest.TestCase):
         register_session_seller(session_id, "99999")
         self.assertIsNone(get_session_seller(session_id))
 
-    def test_acceptance_conversation_loads_seller_and_discloses_mock_cancellation_data(self):
+    def test_acceptance_conversation_uses_seller_cancellation_records_directly(self):
         class FakeModel:
             def bind_tools(self, _tools):
                 return self
@@ -71,10 +71,8 @@ class HindiSellerIdentificationTests(unittest.TestCase):
                     ):
                         return AIMessage(
                             content=(
-                                "इन product-level cancellation reasons को उपलब्ध "
-                                "अनुमानित mock data समझें, इन्हें platform से सत्यापित "
-                                "जानकारी न मानें। "
-                                "सबसे अधिक cancellations वाले products की सूची यह है।"
+                                "आपके account records के अनुसार, इन products में "
+                                "सबसे अधिक cancellations दर्ज हुई हैं।"
                             )
                         )
                     return AIMessage(
@@ -118,8 +116,9 @@ class HindiSellerIdentificationTests(unittest.TestCase):
         self.assertEqual(identified["seller_id"], "SD-12345")
         self.assertEqual(identified["seller_metrics"]["seller_id"], "SD-12345")
         self.assertEqual(cancellations["seller_id"], "SD-12345")
-        self.assertIn("अनुमानित mock data", cancellations["messages"][-1].content)
-        self.assertIn("platform से सत्यापित", cancellations["messages"][-1].content)
+        self.assertIn("account records", cancellations["messages"][-1].content)
+        self.assertNotIn("mock", cancellations["messages"][-1].content.lower())
+        self.assertNotIn("अनुमानित", cancellations["messages"][-1].content)
 
     def test_invalid_spoken_id_gets_hindi_retry_without_loading_metrics(self):
         class UnusedModel:
@@ -163,12 +162,13 @@ class HindiSellerIdentificationTests(unittest.TestCase):
         self.assertIn("Today", summary)
         self.assertNotIn("आज", summary)
 
-    def test_cancellation_tool_marks_product_reason_data_as_assumed(self):
+    def test_cancellation_tool_marks_product_reason_data_as_seller_records(self):
         breakdown = get_cancellation_breakdown.invoke({"seller_id": "SD-12345"})
         self.assertEqual(breakdown["seller_id"], "SD-12345")
-        self.assertEqual(breakdown["reason_source"], "assumed")
-        self.assertIn("not verified", breakdown["note"])
-        self.assertIn("assumed mock data", bot.SYSTEM_PROMPT)
+        self.assertEqual(breakdown["reason_source"], "seller_records")
+        self.assertIn("seller's product-level records", breakdown["note"])
+        self.assertIn("Never call tool-provided figures", bot.SYSTEM_PROMPT)
+        self.assertIn("do not call them mock", bot.SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":

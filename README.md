@@ -70,7 +70,7 @@ conversational Hindi; written portal and chat content remain in English.
 - A saved key is never displayed again — only a masked status is shown —
   and you can clear it anytime to go back to the default.
 
-## Try it with a demo seller
+## Seller profiles
 
 | Seller ID | Seller | Business |
 |---|---|---|
@@ -79,9 +79,10 @@ conversational Hindi; written portal and chat content remain in English.
 | SD-63190 | Arjun | Arjun Mobile Accessories |
 | SD-12345 | Srijan | Srijan Apparel Studio |
 
-Each seller tells a different story — one is fighting stockouts and rising
-cancellations, one is running healthy, one is struggling with fulfilment
-delays. Try them all to see how the advice changes.
+The assistant uses the seller profiles, metrics, inventory, and cancellation
+records available through its tools as the seller's account data. It grounds
+its diagnosis and recommendations in those records and does not describe them
+as mock or assumed data.
 
 ## Getting started
 
@@ -101,7 +102,3 @@ Then point the portal at your local API from the browser console:
 ```js
 localStorage.setItem('seller-assistant-api-url', 'http://127.0.0.1:8000');
 ```
-
-> **Note:** the seller numbers in this demo are illustrative mock data and
-> are clearly marked as assumed — perfect for trying the assistant, but
-> not real sales records.

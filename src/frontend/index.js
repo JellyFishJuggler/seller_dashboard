@@ -43,6 +43,7 @@ let voiceReplyErrored = false;
 let voiceRecoverableError = false;
 let voiceRecoverableMessage = '';
 let voiceAudioChunksLogged = 0;
+let voiceKeepaliveTimer = null;
 let voiceCallFinalizing = false;
 let voiceCallCompleted = false;
 
@@ -300,7 +301,10 @@ async function startVoice() {
       return;
     }
     setVoiceState('connecting', 'Connecting to voice service…');
-    const socketUrl = `${API_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/voice/${encodeURIComponent(sessionId)}`;
+    // Bind the loaded seller to the voice session so the assistant answers
+    // from this seller's data right away instead of asking for a seller ID.
+    const sellerParam = sellerId ? `?seller_id=${encodeURIComponent(sellerId)}` : '';
+    const socketUrl = `${API_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/voice/${encodeURIComponent(sessionId)}${sellerParam}`;
     const socket = new WebSocket(socketUrl);
     voiceSocket = socket;
     socket.binaryType = 'arraybuffer';
@@ -331,6 +335,7 @@ async function startVoice() {
     logVoiceBoundary('Browser microphone capture started');
     voicePaused = false;
     voiceClosingByUser = false;
+    startVoiceKeepalive();
     startVoiceButton.disabled = true;
     endVoiceButton.disabled = false;
     liveTranscript.hidden = false;
@@ -351,9 +356,34 @@ async function startVoice() {
   }
 }
 
+function startVoiceKeepalive() {
+  stopVoiceKeepalive();
+  // Hosted proxies (e.g. Render) drop WebSocket connections that carry no
+  // data for about a minute. While the assistant is thinking or speaking the
+  // microphone is paused, so nothing flows; a small periodic message keeps
+  // the connection alive. The backend ignores unknown control messages.
+  voiceKeepaliveTimer = setInterval(() => {
+    if (voiceSocket?.readyState !== WebSocket.OPEN || !voiceActive) return;
+    if (!voicePaused && !voiceCallFinalizing) return; // live mic audio already flows
+    try {
+      voiceSocket.send(JSON.stringify({ type: 'keepalive' }));
+    } catch {
+      // A failed keepalive is picked up by the socket's close handling.
+    }
+  }, 20000);
+}
+
+function stopVoiceKeepalive() {
+  if (voiceKeepaliveTimer) {
+    clearInterval(voiceKeepaliveTimer);
+    voiceKeepaliveTimer = null;
+  }
+}
+
 function cleanupVoiceResources() {
   voiceActive = false;
   voicePaused = false;
+  stopVoiceKeepalive();
   clearTimeout(voiceEndTimer);
   voiceEndTimer = null;
   if (voiceProcessor) {
@@ -491,6 +521,13 @@ function handleVoiceMessage(event) {
       if (voiceSocket?.readyState === WebSocket.OPEN) {
         voiceSocket.close(1012, 'Speech recognition unavailable');
       }
+      return;
+    }
+    if (data.code === 'empty_transcript') {
+      // Speech that could not be transcribed is a gentle nudge in the voice
+      // status line, not a red error bubble in the conversation.
+      voicePaused = false;
+      setVoiceState('listening', data.message || 'I did not catch that. Please say it again.');
       return;
     }
     voicePaused = false;

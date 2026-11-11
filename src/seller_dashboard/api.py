@@ -16,6 +16,7 @@ import asyncio
 import base64   
 import logging
 import json
+import time
 from langchain_core.messages import HumanMessage, AIMessage
 from asyncio import wait as wait_for_voice_task_completion
 
@@ -29,6 +30,8 @@ from seller_dashboard.tools import (
     get_call_summary,
     get_playbook,
     register_session_seller,
+    is_known_seller,
+    normalize_seller_id,
     _resolve_seller_id,
 )
 from seller_dashboard.conversation_store import (
@@ -455,10 +458,28 @@ def _stt_failure_payload(code: str, detail: str = "") -> tuple[str, str]:
 
 
 @app.websocket("/voice/{session_id}")
-async def voice_input(websocket: WebSocket, session_id: str):
+async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""):
 
     await websocket.accept()
     logger.info("Voice WebSocket session started session_id=%s", session_id)
+
+    # Bind the portal's loaded seller to this voice session so the very first
+    # spoken turn is answered from that seller's data instead of falling back
+    # to the default seller. Unknown IDs stay unbound; the agent will ask.
+    requested_seller = normalize_seller_id(seller_id)
+    if requested_seller and is_known_seller(requested_seller):
+        register_session_seller(session_id, requested_seller)
+        logger.info(
+            "Voice session seller bound session_id=%s seller_id=%s",
+            session_id,
+            requested_seller,
+        )
+    elif requested_seller:
+        logger.info(
+            "Voice session seller id unknown, left unbound session_id=%s requested=%s",
+            session_id,
+            requested_seller,
+        )
 
     playback_complete = asyncio.Event()
     playback_failed = asyncio.Event()
@@ -469,6 +490,8 @@ async def voice_input(websocket: WebSocket, session_id: str):
     assistant_busy = asyncio.Event()
     turn_tasks: set[asyncio.Task] = set()
     processed_request_ids: set[str] = set()
+    partial_request_ids: set[str] = set()
+    last_unkeyed_partial_at = 0.0
     silence_frame = base64.b64encode(b"\x00" * 3200).decode("ascii")
     stt_failure = {"code": "", "detail": ""}
     stt_started = False
@@ -782,6 +805,11 @@ async def voice_input(websocket: WebSocket, session_id: str):
             async def receive_transcript():
                 """Receive transcripts and generate AI voice responses."""
 
+                # Track partial transcripts so an empty final transcript can
+                # tell attempted speech apart from VAD noise. ``nonlocal`` is
+                # required because the handler owns this timestamp.
+                nonlocal last_unkeyed_partial_at
+
                 async for message in sarvam_ws:
                     request_id = extract_request_id(message)
 
@@ -795,6 +823,12 @@ async def voice_input(websocket: WebSocket, session_id: str):
                         )
                         if clean_transcript(getattr(message, "text", None)) is None:
                             continue
+                        if request_id:
+                            partial_request_ids.add(request_id)
+                            if len(partial_request_ids) > 256:
+                                partial_request_ids.pop()
+                        else:
+                            last_unkeyed_partial_at = time.monotonic()
                         await websocket.send_json({
                             "type": "partial_transcript",
                             "text": message.text,
@@ -812,11 +846,39 @@ async def voice_input(websocket: WebSocket, session_id: str):
                         transcript = clean_transcript(raw_transcript)
 
                         if transcript is None:
-                            await websocket.send_json({
-                                "type": "error",
-                                "code": "empty_transcript",
-                                "message": voiceAssistant.retry_prompt(session_id),
-                            })
+                            # A final transcript with no usable text is only a
+                            # real problem when the seller was actually
+                            # speaking (partial transcripts were seen). VAD
+                            # endpointing on room noise should not surface an
+                            # error to the seller. Correlate by request ID when
+                            # available so an earlier utterance cannot trigger
+                            # a stale retry hint for a later noise frame.
+                            if request_id:
+                                speech_attempted = request_id in partial_request_ids
+                                partial_request_ids.discard(request_id)
+                            else:
+                                speech_attempted = (
+                                    time.monotonic() - last_unkeyed_partial_at < 15.0
+                                )
+                                last_unkeyed_partial_at = 0.0
+                            if speech_attempted:
+                                logger.info(
+                                    "Speech detected but transcript was empty session_id=%s request_id=%s",
+                                    session_id,
+                                    request_id or "unavailable",
+                                )
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "code": "empty_transcript",
+                                    "recoverable": True,
+                                    "message": voiceAssistant.retry_prompt(session_id),
+                                })
+                            else:
+                                logger.info(
+                                    "Empty STT transcript without speech ignored session_id=%s request_id=%s",
+                                    session_id,
+                                    request_id or "unavailable",
+                                )
                             continue
 
                         if request_id and request_id in processed_request_ids:
@@ -826,6 +888,10 @@ async def voice_input(websocket: WebSocket, session_id: str):
                                 request_id,
                             )
                             continue
+                        if request_id:
+                            partial_request_ids.discard(request_id)
+                        else:
+                            last_unkeyed_partial_at = 0.0
                         if request_id:
                             processed_request_ids.add(request_id)
                             if len(processed_request_ids) > 256:

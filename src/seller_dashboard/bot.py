@@ -47,6 +47,7 @@ from seller_dashboard.tools import (
     get_call_summary,
     get_playbook,
     register_session_seller,
+    get_session_seller,
 )
 
 SYSTEM_PROMPT = """
@@ -572,9 +573,14 @@ def build_graph():
     """Build and compile the agent graph."""
     model = llm.bind_tools(tools)
 
-    def prepare_seller_diagnosis(state: State):
+    def prepare_seller_diagnosis(state: State, config: RunnableConfig):
         supplied_id = seller_id_from_messages(state["messages"])
         seller_id = supplied_id or state.get("seller_id")
+        if not seller_id:
+            # Voice sessions register the portal's loaded seller ID when the
+            # call connects, so the first spoken turn already has context.
+            thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
+            seller_id = get_session_seller(thread_id)
         if not seller_id or (seller_id == state.get("seller_id") and state.get("seller_metrics")):
             return {}
 

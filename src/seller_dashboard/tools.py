@@ -31,6 +31,20 @@ def register_session_seller(thread_id: str, seller_id: str) -> None:
             _SESSION_SELLER[str(thread_id)] = normalized
 
 
+def get_session_seller(thread_id: str | None) -> str | None:
+    """Return the seller ID registered for a session, if any."""
+    if not thread_id:
+        return None
+    with _SESSION_LOCK:
+        return _SESSION_SELLER.get(str(thread_id))
+
+
+def is_known_seller(raw_seller_id: object) -> bool:
+    """Check whether a seller ID resolves to a record in the seller dataset."""
+    normalized = normalize_seller_id(raw_seller_id)
+    return bool(normalized) and normalized in SELLERS
+
+
 def _resolve_seller_id(
     config: RunnableConfig | None = None,
     thread_id: str | None = None,

@@ -11,6 +11,14 @@ const connectionLabel = document.querySelector('#connection-label');
 const transcriptLive = document.querySelector('#transcript-live');
 const sellerIdInput = document.querySelector('#seller-id-input');
 const loadSellerButton = document.querySelector('#load-seller');
+const settingsToggle = document.querySelector('#settings-toggle');
+const settingsDialog = document.querySelector('#settings-dialog');
+const settingsForm = document.querySelector('#settings-form');
+const settingsCancel = document.querySelector('#settings-cancel');
+const settingsSave = document.querySelector('#settings-save');
+const settingsClear = document.querySelector('#settings-clear');
+const sarvamKeyInput = document.querySelector('#sarvam-key-input');
+const sarvamKeyStatus = document.querySelector('#sarvam-key-status');
 
 let sellerId = localStorage.getItem('seller-assistant-seller-id') || '';
 let sessionId = createSessionId();
@@ -27,10 +35,38 @@ let voiceAssistantEnded = false;
 let voiceAudioReceived = false;
 let voicePlaybackPending = false;
 let voicePlaybackActive = false;
+let voicePlaybackIsFinalization = false;
 let voiceEndTimer = null;
 let voiceClosingByUser = false;
 let voiceStartToken = 0;
 let voiceReplyErrored = false;
+let voiceRecoverableError = false;
+let voiceRecoverableMessage = '';
+let voiceAudioChunksLogged = 0;
+let voiceCallFinalizing = false;
+let voiceCallCompleted = false;
+
+function voiceTextState(value) {
+  if (value === null || value === undefined) return 'none';
+  if (typeof value !== 'string') return 'invalid_type';
+  if (value.length === 0) return 'empty';
+  if (!value.trim()) return 'whitespace';
+  return 'present';
+}
+
+function logVoiceBoundary(service, text = null, requestId = null, extra = {}) {
+  const state = Object.prototype.hasOwnProperty.call(extra, 'audio_bytes')
+    ? 'not_applicable' : voiceTextState(text);
+  console.info('voice_boundary', {
+    service,
+    session_id: sessionId,
+    text_exists: typeof text === 'string' && text.length > 0,
+    text_length: typeof text === 'string' ? text.length : 0,
+    text_state: state,
+    request_id: requestId || 'unavailable',
+    ...extra,
+  });
+}
 
 function createSessionId() {
   return globalThis.crypto?.randomUUID?.() || `seller-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -84,8 +120,15 @@ function addMessage(text, who, extraClass = '') {
 }
 
 function sendVoicePcm(pcm) {
-  if (voiceActive && !voicePaused && voiceSocket?.readyState === WebSocket.OPEN) {
+  if (pcm?.byteLength && voiceActive && !voicePaused && !voiceCallFinalizing && voiceSocket?.readyState === WebSocket.OPEN) {
     voiceSocket.send(pcm.buffer);
+    voiceAudioChunksLogged += 1;
+    if (voiceAudioChunksLogged === 1 || voiceAudioChunksLogged % 50 === 0) {
+      logVoiceBoundary('Browser PCM -> FastAPI WebSocket', null, null, {
+        audio_bytes: pcm.byteLength,
+        chunks_sent: voiceAudioChunksLogged,
+      });
+    }
   }
 }
 
@@ -106,16 +149,40 @@ function floatToPcm16(samples, sampleRate) {
 }
 
 async function connectMicrophone() {
-  voiceStream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
-
   try {
     voiceAudioContext = new AudioContext({ sampleRate: 16000 });
   } catch {
     voiceAudioContext = new AudioContext();
   }
-  await voiceAudioContext.resume();
+  // Start the context during the button gesture, before the permission prompt
+  // can consume the browser's transient user activation.
+  const resumeAudio = voiceAudioContext.resume().catch(() => undefined);
+  voiceStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  await resumeAudio;
+  if (voiceAudioContext.state !== 'running') {
+    await voiceAudioContext.resume();
+  }
+  if (voiceAudioContext.state !== 'running') {
+    throw new Error('The browser audio system is paused. Allow microphone audio and try again.');
+  }
+
+  const microphoneTrack = voiceStream.getAudioTracks()[0];
+  if (!microphoneTrack || microphoneTrack.readyState !== 'live') {
+    throw new Error('No active microphone was found. Check your microphone and try again.');
+  }
+  microphoneTrack.addEventListener('ended', () => {
+    if (!voiceActive || voiceCallFinalizing) return;
+    voiceRecoverableError = true;
+    voiceRecoverableMessage = 'The microphone disconnected. Check it, then start voice again.';
+    voicePaused = true;
+    setVoiceState('error', voiceRecoverableMessage);
+    if (voiceSocket?.readyState === WebSocket.OPEN) {
+      voiceSocket.close(1012, 'Microphone disconnected');
+    }
+  }, { once: true });
+
   voiceSource = voiceAudioContext.createMediaStreamSource(voiceStream);
   voiceMutedGain = voiceAudioContext.createGain();
   voiceMutedGain.gain.value = 0;
@@ -211,12 +278,18 @@ async function connectMicrophone() {
 
 async function startVoice() {
   if (voiceActive || voiceStarting) return;
+  if (!window.isSecureContext) {
+    setVoiceState('error', 'Microphone access requires HTTPS or localhost. Open the portal using a secure connection.');
+    return;
+  }
   if (!navigator.mediaDevices?.getUserMedia || !('WebSocket' in window)) {
     setVoiceState('error', 'This browser does not support microphone voice chat.');
     return;
   }
 
   const attempt = ++voiceStartToken;
+  voiceRecoverableError = false;
+  voiceRecoverableMessage = '';
   voiceStarting = true;
   startVoiceButton.disabled = true;
   setVoiceState('connecting', 'Requesting microphone access…');
@@ -226,6 +299,7 @@ async function startVoice() {
       cleanupVoiceResources();
       return;
     }
+    setVoiceState('connecting', 'Connecting to voice service…');
     const socketUrl = `${API_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/voice/${encodeURIComponent(sessionId)}`;
     const socket = new WebSocket(socketUrl);
     voiceSocket = socket;
@@ -237,7 +311,9 @@ async function startVoice() {
     socket.onclose = () => {
       const wasActive = voiceActive;
       cleanupVoiceResources();
-      if (wasActive) setVoiceState('error', 'Voice connection closed. Start a new call to reconnect.');
+      if (voiceCallCompleted) setVoiceState('idle', 'Call completed and saved');
+      else if (voiceRecoverableError) setVoiceState('error', voiceRecoverableMessage);
+      else if (wasActive) setVoiceState('error', 'Voice connection closed. Start a new call to reconnect.');
       else if (!voiceClosingByUser) setVoiceState('error', 'Voice connection closed.');
       voiceClosingByUser = false;
       voiceSocket = null;
@@ -249,13 +325,17 @@ async function startVoice() {
       socket.addEventListener('close', () => { clearTimeout(timeout); reject(new Error('The voice service closed the connection.')); }, { once: true });
     });
     voiceActive = true;
+    voiceCallFinalizing = false;
+    voiceCallCompleted = false;
+    voiceAudioChunksLogged = 0;
+    logVoiceBoundary('Browser microphone capture started');
     voicePaused = false;
     voiceClosingByUser = false;
     startVoiceButton.disabled = true;
     endVoiceButton.disabled = false;
     liveTranscript.hidden = false;
-    liveTranscript.textContent = 'Microphone connected. Start speaking when ready.';
-    setVoiceState('listening', 'Listening…');
+    liveTranscript.textContent = 'Microphone ready. Connecting speech recognition…';
+    setVoiceState('connecting', 'Microphone ready. Connecting speech recognition…');
   } catch (error) {
     cleanupVoiceResources();
     if (voiceSocket && voiceSocket.readyState < WebSocket.CLOSING) voiceSocket.close();
@@ -292,14 +372,25 @@ function cleanupVoiceResources() {
   voiceAudioContext = null;
   voicePlaybackPending = false;
   voicePlaybackActive = false;
+  voicePlaybackIsFinalization = false;
   voiceAudioReceived = false;
   voiceAssistantEnded = false;
+  voiceCallFinalizing = false;
   startVoiceButton.disabled = false;
   endVoiceButton.disabled = true;
+  liveTranscript.hidden = true;
 }
 
 function endVoice() {
   if (!voiceActive && !voiceStarting) return;
+  if (voiceSocket?.readyState === WebSocket.OPEN) {
+    voiceCallFinalizing = true;
+    voicePaused = true;
+    endVoiceButton.disabled = true;
+    setVoiceState('processing', 'Saving your call…');
+    voiceSocket.send(JSON.stringify({ type: 'end_call' }));
+    return;
+  }
   voiceStartToken += 1;
   voiceStarting = false;
   voiceClosingByUser = true;
@@ -313,6 +404,9 @@ function endVoice() {
 
 function handleVoiceMessage(event) {
   if (typeof event.data !== 'string') {
+    logVoiceBoundary('FastAPI WebSocket -> Browser TTS audio', null, null, {
+      audio_bytes: event.data?.byteLength ?? event.data?.size ?? 0,
+    });
     voiceAudioReceived = true;
     voicePlaybackPending = false;
     playVoiceAudio(event.data);
@@ -327,11 +421,18 @@ function handleVoiceMessage(event) {
     return;
   }
 
-  if (data.type === 'partial_transcript') {
+  if (data.type === 'stt_ready') {
+    voicePaused = false;
+    liveTranscript.hidden = false;
+    liveTranscript.textContent = 'Speech recognition connected. Start speaking.';
+    setVoiceState('listening', 'Listening…');
+  } else if (data.type === 'partial_transcript') {
+    logVoiceBoundary('FastAPI WebSocket -> Browser partial transcript', data.text, data.request_id);
     liveTranscript.hidden = false;
     liveTranscript.textContent = data.text || 'Listening…';
     setVoiceState('listening', 'Listening…');
   } else if (data.type === 'assistant_start') {
+    logVoiceBoundary('FastAPI WebSocket -> Browser final transcript', data.transcript, data.request_id);
     voicePaused = true;
     voiceAssistantEnded = false;
     voiceAudioReceived = false;
@@ -340,12 +441,26 @@ function handleVoiceMessage(event) {
     liveTranscript.hidden = true;
     if (data.transcript) addMessage(data.transcript, 'user');
     setVoiceState('processing', 'Assistant is thinking…');
+  } else if (data.type === 'call_finalizing') {
+    voiceCallFinalizing = true;
+    voicePaused = true;
+    clearTimeout(voiceEndTimer);
+    setVoiceState('processing', 'Preparing your call summary…');
+  } else if (data.type === 'finalization_in_progress') {
+    voiceCallFinalizing = true;
+    voicePaused = true;
+    setVoiceState('processing', data.message || 'Your call is already being finalized…');
   } else if (data.type === 'assistant_reply') {
+    logVoiceBoundary('FastAPI WebSocket -> Browser assistant text', data.text, data.request_id);
+    voicePlaybackIsFinalization = voiceCallFinalizing;
     if (data.text) addMessage(data.text, 'assistant');
     setVoiceState('speaking', 'Assistant is speaking…');
   } else if (data.type === 'assistant_end') {
     voiceAssistantEnded = true;
-    if (voiceReplyErrored) {
+    if (voiceCallFinalizing) {
+      voicePaused = true;
+      setVoiceState('speaking', 'Playing your closing message…');
+    } else if (voiceReplyErrored) {
       finishVoiceTurn();
     } else if (voiceAudioReceived || voicePlaybackActive || voicePlaybackPending) {
       resumeVoiceAfterReply();
@@ -355,11 +470,40 @@ function handleVoiceMessage(event) {
         if (voiceAssistantEnded && !voiceAudioReceived && !voicePlaybackActive) finishVoiceTurn();
       }, 4000);
     }
+  } else if (data.type === 'call_ended') {
+    voiceCallCompleted = data.status === 'completed';
+    voiceCallFinalizing = false;
+    voicePaused = true;
+    endVoiceButton.disabled = true;
+    setVoiceState('idle', voiceCallCompleted ? 'Call completed and saved' : 'Call ended');
   } else if (data.type === 'error') {
+    logVoiceBoundary(`FastAPI WebSocket error: ${data.code || 'voice_error'}`, data.message, data.request_id);
+    if (data.recoverable && ['stt_connection_closed', 'stt_quota_exceeded', 'stt_auth_failed'].includes(data.code)) {
+      if (voiceCallFinalizing) {
+        voicePaused = true;
+        setVoiceState('processing', data.message || 'Speech recognition disconnected while saving the call.');
+        return;
+      }
+      voiceRecoverableError = true;
+      voiceRecoverableMessage = data.message || 'Speech recognition disconnected. Tap Start voice to retry.';
+      voicePaused = true;
+      setVoiceState('error', voiceRecoverableMessage);
+      if (voiceSocket?.readyState === WebSocket.OPEN) {
+        voiceSocket.close(1012, 'Speech recognition unavailable');
+      }
+      return;
+    }
     voicePaused = false;
     voicePlaybackPending = false;
     voiceAssistantEnded = true;
     voiceReplyErrored = true;
+    if (voiceCallFinalizing) {
+      voiceCallFinalizing = false;
+      voicePaused = false;
+      voiceAssistantEnded = false;
+      voiceReplyErrored = false;
+      endVoiceButton.disabled = false;
+    }
     addMessage(`Voice assistant error: ${data.message || 'Unknown backend error.'}`, 'assistant', 'error-message');
     setVoiceState('error', data.message || 'The voice service returned an error.');
   }
@@ -388,16 +532,31 @@ async function playVoiceAudio(audioData) {
     source.connect(voiceAudioContext.destination);
     source.onended = () => {
       voicePlaybackActive = false;
-      if (voiceAssistantEnded) finishVoiceTurn();
+      if (voiceSocket?.readyState === WebSocket.OPEN) {
+        voiceSocket.send(JSON.stringify({
+          type: voicePlaybackIsFinalization ? 'playback_complete' : 'turn_playback_complete',
+        }));
+      }
+      if (voiceCallFinalizing) {
+        voicePaused = true;
+        setVoiceState('processing', 'Confirming call completion…');
+      } else if (voiceAssistantEnded) finishVoiceTurn();
       else setVoiceState('processing', 'Finishing response…');
     };
     source.start();
   } catch (error) {
     voicePlaybackActive = false;
-    voicePaused = false;
+    if (!voiceCallFinalizing) voicePaused = false;
+    if (voiceSocket?.readyState === WebSocket.OPEN) {
+      voiceSocket.send(JSON.stringify({
+        type: voicePlaybackIsFinalization ? 'playback_failed' : 'turn_playback_failed',
+      }));
+    }
     addMessage(`Could not play the assistant audio: ${error.message || 'unsupported audio format.'}`, 'assistant', 'error-message');
-    setVoiceState('error', 'Audio playback failed; microphone resumed.');
-    if (voiceAssistantEnded) finishVoiceTurn();
+    setVoiceState('error', voiceCallFinalizing
+      ? 'Closing audio failed; waiting for retry.'
+      : 'Audio playback failed.');
+    if (!voiceCallFinalizing && voiceAssistantEnded) finishVoiceTurn();
   }
 }
 
@@ -413,6 +572,10 @@ function resumeVoiceAfterReply() {
 function finishVoiceTurn() {
   clearTimeout(voiceEndTimer);
   voicePlaybackPending = false;
+  if (voiceCallFinalizing) {
+    voicePaused = true;
+    return;
+  }
   voicePaused = false;
   if (voiceActive) setVoiceState('listening', 'Listening…');
 }
@@ -489,6 +652,119 @@ function startNewSession() {
   setVoiceState('idle', 'Tap to start speaking');
 }
 
+function setSarvamKeyStatus(message, state = '') {
+  sarvamKeyStatus.textContent = message;
+  sarvamKeyStatus.dataset.state = state;
+}
+
+async function loadSarvamKeyStatus() {
+  setSarvamKeyStatus('Checking…');
+  settingsClear.disabled = true;
+  try {
+    const response = await fetch(`${API_URL.replace(/\/$/, '')}/settings/sarvam-key`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not read the API key status.');
+    if (data.source === 'custom') {
+      setSarvamKeyStatus('Custom API key configured. Saving a new key replaces it.', 'success');
+      settingsClear.disabled = false;
+    } else if (data.source === 'env') {
+      setSarvamKeyStatus('Using the default key from .env. Enter a custom key to override it.');
+    } else {
+      setSarvamKeyStatus('No Sarvam API key is configured.', 'error');
+    }
+  } catch (error) {
+    setSarvamKeyStatus(error.message || 'Could not read the API key status.', 'error');
+  }
+}
+
+function openSettings() {
+  sarvamKeyInput.value = '';
+  loadSarvamKeyStatus();
+  if (typeof settingsDialog.showModal === 'function' && !settingsDialog.open) {
+    settingsDialog.showModal();
+  } else {
+    settingsDialog.setAttribute('open', '');
+  }
+}
+
+function closeSettings() {
+  if (typeof settingsDialog.close === 'function') settingsDialog.close();
+  else settingsDialog.removeAttribute('open');
+}
+
+async function saveSarvamKey(event) {
+  event.preventDefault();
+  const apiKey = sarvamKeyInput.value.trim();
+  if (!apiKey) {
+    // An accidental empty submit must never clear the saved custom key.
+    setSarvamKeyStatus('Enter a key to save, or use “Clear custom key” to return to the .env key.', 'error');
+    sarvamKeyInput.focus();
+    return;
+  }
+  settingsSave.disabled = true;
+  setSarvamKeyStatus('Saving…');
+  try {
+    const response = await fetch(`${API_URL.replace(/\/$/, '')}/settings/sarvam-key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'Could not save the API key.');
+    sarvamKeyInput.value = '';
+    if (data.source === 'custom') {
+      setSarvamKeyStatus('Custom key saved. LLM, speech recognition and text-to-speech now use it.', 'success');
+      settingsClear.disabled = false;
+    } else if (data.source === 'env') {
+      setSarvamKeyStatus('Custom key cleared. Using the .env key.', 'success');
+      settingsClear.disabled = true;
+    } else {
+      setSarvamKeyStatus('No Sarvam API key is configured.', 'error');
+    }
+    if (!voiceActive && !voiceStarting && voiceBar.dataset.state === 'error') {
+      liveTranscript.hidden = true;
+      setVoiceState('idle', 'API key updated. Tap to start speaking.');
+    }
+  } catch (error) {
+    setSarvamKeyStatus(error.message || 'Could not save the API key.', 'error');
+  } finally {
+    settingsSave.disabled = false;
+  }
+}
+
+async function clearSarvamKey() {
+  if (settingsClear.disabled) return;
+  settingsClear.disabled = true;
+  setSarvamKeyStatus('Clearing custom key…');
+  try {
+    const response = await fetch(`${API_URL.replace(/\/$/, '')}/settings/sarvam-key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: '' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'Could not clear the custom key.');
+    sarvamKeyInput.value = '';
+    if (data.source === 'env') {
+      setSarvamKeyStatus('Custom key cleared. Using the .env key.', 'success');
+      settingsClear.disabled = true;
+    } else if (data.source === 'custom') {
+      setSarvamKeyStatus('Custom API key configured.', 'success');
+      settingsClear.disabled = false;
+    } else {
+      setSarvamKeyStatus('No Sarvam API key is configured.', 'error');
+      settingsClear.disabled = true;
+    }
+    if (!voiceActive && !voiceStarting && voiceBar.dataset.state === 'error') {
+      liveTranscript.hidden = true;
+      setVoiceState('idle', 'API key updated. Tap to start speaking.');
+    }
+  } catch (error) {
+    setSarvamKeyStatus(error.message || 'Could not clear the custom key.', 'error');
+    settingsClear.disabled = false;
+  }
+}
+
 sellerIdInput.value = sellerId;
 if (sellerId) loadSellerMetrics();
 loadSellerButton.addEventListener('click', loadSellerMetrics);
@@ -498,3 +774,7 @@ sellerIdInput.addEventListener('keydown', (event) => {
 newChatButton.addEventListener('click', startNewSession);
 startVoiceButton.addEventListener('click', startVoice);
 endVoiceButton.addEventListener('click', endVoice);
+settingsToggle.addEventListener('click', openSettings);
+settingsCancel.addEventListener('click', closeSettings);
+settingsClear.addEventListener('click', clearSarvamKey);
+settingsForm.addEventListener('submit', saveSarvamKey);

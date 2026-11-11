@@ -29,6 +29,7 @@
           <button class="load-seller" id="load-seller" type="button">Load</button>
         </div>
         <button class="new-session" id="new-chat" type="button"><span aria-hidden="true">＋</span> New session</button>
+        <button class="new-session" id="settings-toggle" type="button" aria-haspopup="dialog">Settings</button>
       </div>
     </header>
 
@@ -84,5 +85,20 @@
     </section>
     <footer class="page-footer"><span class="footer-spark" aria-hidden="true">✳</span> Built for your business, ready when you are.</footer>
   </main>
+
+  <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+    <form class="settings-form" id="settings-form" method="dialog">
+      <h2 id="settings-title">Sarvam API key</h2>
+      <p class="settings-help">Leave this blank to use the key configured in <code>.env</code>. A custom key is stored only on this backend and is never displayed.</p>
+      <label for="sarvam-key-input">Custom API key</label>
+      <input id="sarvam-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter a new key">
+      <p class="settings-status" id="sarvam-key-status" role="status" aria-live="polite">Checking…</p>
+      <div class="settings-actions">
+        <button class="end-call" id="settings-cancel" type="button">Close</button>
+        <button class="end-call" id="settings-clear" type="button" disabled>Clear custom key</button>
+        <button class="load-seller" id="settings-save" type="submit">Save key</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

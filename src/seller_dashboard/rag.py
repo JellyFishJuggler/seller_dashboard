@@ -24,6 +24,79 @@ PROJECT_ROOT = MODULE_PATH.parents[2]
 DEFAULT_KNOWLEDGE_BASE = MODULE_PATH.parents[1] / "files" / "knowledge_base"
 DEFAULT_PERSIST_DIRECTORY = PROJECT_ROOT / "data" / "vector_store"
 DEFAULT_COLLECTION_NAME = "seller_knowledge_base_tfidf"
+DEFAULT_SIMILARITY_THRESHOLD = 0.05
+MAX_CHUNKS_PER_SOURCE = 2
+
+# The verified knowledge corpus is English while the assistant now accepts and
+# answers in Hindi. Expand common seller-business phrases to corpus vocabulary
+# for lexical retrieval; this is term expansion, not a translation of the user
+# message or seller-specific data.
+_HINDI_RETRIEVAL_TERMS = (
+    ("बिक्री", "sales revenue"),
+    ("ऑर्डर", "orders order volume"),
+    ("आर्डर", "orders order volume"),
+    ("औसत बिक्री मूल्य", "average selling price ASP price mix"),
+    ("एएसपी", "average selling price ASP"),
+    ("छूट", "discount promotion pricing"),
+    ("डिस्काउंट", "discount promotion pricing"),
+    ("कीमत", "price pricing price positioning"),
+    ("दाम", "price pricing"),
+    ("मुनाफा", "profit profitability margin unit economics cost fees"),
+    ("मुनाफ़ा", "profit profitability margin unit economics cost fees"),
+    ("लाभ", "profit profitability margin contribution"),
+    ("लागत", "cost fees shipping packaging returns contribution margin"),
+    ("मार्जिन", "margin gross margin contribution margin"),
+    ("स्टॉक आउट", "stockout out of stock inventory"),
+    ("आउट ऑफ स्टॉक", "stockout stockouts stockout recovery out of stock inventory historical product orders restock prioritization"),
+    ("स्टॉक खत्म", "stockout stockouts stockout recovery out of stock inventory historical product orders"),
+    ("इन्वेंटरी", "inventory stock availability forecast replenishment reorder point safety stock"),
+    ("रीस्टॉक", "restocking replenishment stockout recovery supplier lead time historical orders"),
+    ("दोबारा मंगव", "replenishment restocking supplier lead time reorder point inventory forecast"),
+    ("मंगाने", "replenishment restocking supplier lead time reorder point inventory forecast"),
+    ("मात्रा", "quantity safety stock demand forecast reorder point inventory"),
+    ("पहले किन्हें", "prioritization stockout historical product orders restock recovery"),
+    ("दृश्यता", "search visibility discoverability impressions"),
+    ("कम दिख", "search visibility discoverability impressions"),
+    ("सर्च", "search visibility discoverability impressions"),
+    ("कन्वर्ज़न", "conversion rate product page visits clicks orders"),
+    ("कन्वर्शन", "conversion rate product page visits clicks orders"),
+    ("व्यू", "views product page visits clicks conversion"),
+    ("क्लिक", "clicks visits conversion funnel"),
+    ("कैंसलेशन", "cancellation rate cancellation reasons fulfillment"),
+    ("रद्द", "cancellation rate cancellation reasons order fulfillment"),
+    ("रिटर्न", "returns RTO refund reverse logistics"),
+    ("वापसी", "returns RTO refund reverse logistics"),
+    ("आरटीओ", "RTO return to origin returns"),
+    ("लिस्टिंग", "product listing catalogue title images attributes"),
+    ("शीर्षक", "product title listing catalogue"),
+    ("तस्वीर", "product images listing"),
+    ("फोटो", "product images listing"),
+    ("कपड़ों", "apparel clothing fashion size fit variants"),
+    ("कपड़े", "apparel clothing fashion size fit variants"),
+    ("साइज़", "apparel size chart fit variants returns"),
+    ("होम डेकोर", "home decor merchandising product photography"),
+    ("घर की सजावट", "home decor merchandising product photography"),
+    ("मोबाइल", "mobile accessories charger cable compatibility specifications"),
+    ("चार्जर", "mobile accessories charger compatibility wattage"),
+    ("केबल", "mobile accessories cable connector compatibility specifications"),
+    ("प्राथमिकता", "prioritization business action impact urgency effort"),
+    ("पहले क्या", "prioritization business action impact urgency effort"),
+    ("एक्शन", "business action planning impact urgency effort"),
+    ("कार्रवाई", "business action planning impact urgency effort"),
+)
+
+
+def expand_retrieval_query(query: str) -> str:
+    """Add English corpus terms for recognized Hindi seller-business phrases."""
+    normalized = query.lower()
+    expansions = [
+        english_terms
+        for hindi_phrase, english_terms in _HINDI_RETRIEVAL_TERMS
+        if hindi_phrase in normalized
+    ]
+    if not expansions:
+        return query
+    return f"{query}\nBusiness knowledge terms: {' '.join(dict.fromkeys(expansions))}"
 
 
 def _safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -257,7 +330,7 @@ class RAGRetriever:
         self,
         query: str,
         k: int = 5,
-        threshold: float = 0.0,
+        threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     ) -> list[dict[str, Any]]:
         """Return top-k chunks; threshold is cosine similarity from 0 to 1."""
         if not query or not query.strip():
@@ -271,19 +344,24 @@ class RAGRetriever:
         if count == 0:
             return []
 
-        query_vector = self.embedding_manager.generate_embeddings([query.strip()])[0]
+        expanded_query = expand_retrieval_query(query.strip())
+        query_vector = self.embedding_manager.generate_embeddings([expanded_query])[0]
         query_vector = (
             query_vector.tolist()
             if hasattr(query_vector, "tolist")
             else list(query_vector)
         )
+        # The source cap below prevents the final prompt from being dominated
+        # by adjacent chunks from one file. Fetch a small candidate window so
+        # relevant sources can still backfill the top-k output.
         results = self.vector_store.collection.query(
             query_embeddings=[query_vector],
-            n_results=min(k, count),
+            n_results=min(k * 3, count),
             include=["documents", "metadatas", "distances"],
         )
 
         found = []
+        per_source: dict[str, int] = {}
         docs = results.get("documents", [[]])[0] or []
         metas = results.get("metadatas", [[]])[0] or []
         distances = results.get("distances", [[]])[0] or []
@@ -294,15 +372,23 @@ class RAGRetriever:
         ):
             # Chroma cosine distance = 1 - cosine similarity.
             similarity = max(0.0, min(1.0, 1.0 - float(distance)))
-            if similarity >= threshold:
-                found.append({
-                    "id": doc_id,
-                    "content": content,
-                    "metadata": metadata or {},
-                    "similarity_score": similarity,
-                    "distance": float(distance),
-                    "rank": rank,
-                })
+            if similarity < threshold:
+                continue
+            metadata = metadata or {}
+            source = str(metadata.get("filename") or metadata.get("source") or "unknown")
+            if per_source.get(source, 0) >= MAX_CHUNKS_PER_SOURCE:
+                continue
+            per_source[source] = per_source.get(source, 0) + 1
+            found.append({
+                "id": doc_id,
+                "content": content,
+                "metadata": metadata,
+                "similarity_score": similarity,
+                "distance": float(distance),
+                "rank": rank,
+            })
+            if len(found) >= k:
+                break
         return found
 
 

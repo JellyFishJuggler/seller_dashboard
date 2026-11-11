@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Project files
+tests/
+temp.py
+files/knowledge_base
+private/
+closure_test_*/

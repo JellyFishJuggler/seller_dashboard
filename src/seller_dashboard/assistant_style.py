@@ -13,6 +13,13 @@ FEMININE_VOICE_PROMPT = (
     "seller names, product names, IDs, metrics, and numerical values exactly."
 )
 
+ENGLISH_RESPONSE_PROMPT = (
+    "Always answer in clear, professional conversational English, regardless of "
+    "the seller's language. Apply this to greetings, follow-ups, explanations, "
+    "recommendations, confirmations, errors, fallbacks, and summaries. Preserve "
+    "seller names, product names, IDs, metrics, and numerical values exactly."
+)
+
 HINDI_RESPONSE_FALLBACK = (
     "माफ़ कीजिए, मैं अभी आपका उत्तर हिंदी में तैयार नहीं कर पाई हूँ। "
     "कृपया अपना सवाल दोबारा पूछें।"

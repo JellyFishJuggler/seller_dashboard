@@ -324,7 +324,12 @@ class SummaryStorageTests(unittest.TestCase):
         fake_llm = Mock()
         fake_llm.invoke.return_value = SimpleNamespace(content="Call summary generated.")
 
-        result = generate_call_summary(self.seller_id, self.session_id, llm=fake_llm)
+        result = generate_call_summary(
+            self.seller_id,
+            self.session_id,
+            llm=fake_llm,
+            language="hindi",
+        )
 
         self.assertTrue(result["success"])
         prompt = fake_llm.invoke.call_args.args[0]

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from seller_dashboard.assistant_style import ensure_hindi_response
+from seller_dashboard.assistant_style import ENGLISH_RESPONSE_PROMPT, ensure_hindi_response
 
 from seller_dashboard.action_store import set_actions_csv_path
 from seller_dashboard.bot import language_policy
@@ -36,12 +36,16 @@ class VoiceLanguageAndActionTests(unittest.TestCase):
         set_actions_csv_path(None)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
-    def test_language_policy_is_fixed_to_hindi(self):
-        expected_policy = language_policy("hindi")
+    def test_language_policy_is_hindi_for_voice_and_english_for_text(self):
+        expected_policy = language_policy("hindi", voice_mode=True)
         for requested_language in ("hindi", "english", "hinglish"):
             with self.subTest(requested_language=requested_language):
-                self.assertEqual(language_policy(requested_language), expected_policy)
+                self.assertEqual(
+                    language_policy(requested_language, voice_mode=True),
+                    expected_policy,
+                )
                 self.assertIn("Always answer in natural", expected_policy)
+                self.assertEqual(language_policy(requested_language), ENGLISH_RESPONSE_PROMPT)
 
     def test_tts_uses_hindi_response_and_language_for_every_input(self):
         samples = [

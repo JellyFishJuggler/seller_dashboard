@@ -94,6 +94,7 @@ async function fetchStub(url, options = {}) {
 }
 
 const fakeTimers = { intervals: [] };
+const localValues = new Map();
 
 function fakeSetInterval(callback, delay) {
   const handle = { callback, delay, cleared: false };
@@ -122,7 +123,10 @@ const context = vm.createContext({
       },
     },
   },
-  localStorage: { getItem: () => '' },
+  localStorage: {
+    getItem: (key) => localValues.get(key) || '',
+    setItem: (key, value) => localValues.set(key, value),
+  },
   requestAnimationFrame: (callback) => callback(),
   setTimeout,
   clearTimeout,
@@ -131,6 +135,7 @@ const context = vm.createContext({
   fakeTimers,
   console,
   URL,
+  URLSearchParams,
   Math,
   Date,
 });
@@ -153,25 +158,25 @@ const test = new vm.Script(`${source}
     assert.equal(voiceActive, false);
     assert.equal(startVoiceButton.disabled, false);
     assert.equal(voiceBar.dataset.state, 'error');
-    assert.match(voiceStatus.textContent, /जारी रखने के लिए voice फिर शुरू करें/);
+    assert.match(voiceStatus.textContent, /Start voice again to continue/);
 
     await startVoice();
     assert.equal(FakeWebSocket.instances.length, 2);
     assert.equal(voiceActive, true);
 
     handleVoiceMessage({ data: JSON.stringify({ type: 'stt_ready' }) });
-    assert.equal(voiceStatus.textContent, 'मैं सुन रही हूँ…');
+    assert.equal(voiceStatus.textContent, 'Listening…');
 
     handleVoiceMessage({ data: JSON.stringify({
       type: 'error',
       code: 'stt_quota_exceeded',
       recoverable: true,
-      message: 'आपकी speech recognition quota पूरी हो गई है। कृपया API plan जाँचें।',
+      message: 'Speech recognition quota reached. Please check the API plan.',
     }) });
 
     assert.equal(voiceActive, false);
     assert.equal(startVoiceButton.disabled, false);
-    assert.match(voiceStatus.textContent, /quota पूरी हो गई है/);
+    assert.match(voiceStatus.textContent, /quota reached/i);
 
     await startVoice();
     assert.equal(FakeWebSocket.instances.length, 3);
@@ -180,7 +185,7 @@ const test = new vm.Script(`${source}
     voiceSocket.close();
     assert.equal(voiceActive, false);
     assert.equal(startVoiceButton.disabled, false);
-    assert.match(voiceStatus.textContent, /voice फिर शुरू करें/);
+    assert.match(voiceStatus.textContent, /Restart voice/i);
 
     await startVoice();
     assert.equal(FakeWebSocket.instances.length, 4);
@@ -204,6 +209,7 @@ const test = new vm.Script(`${source}
     assert.equal(FakeWebSocket.instances.length, 5);
     assert.ok(FakeWebSocket.instances[4].url.includes('/voice/'));
     assert.ok(FakeWebSocket.instances[4].url.includes('seller_id=SD-48213'));
+    assert.ok(FakeWebSocket.instances[4].url.includes('client_id='));
     const keepaliveSocket = voiceSocket;
     assert.equal(keepaliveSocket.readyState, FakeWebSocket.OPEN);
     const keepaliveHandles = fakeTimers.intervals.filter((handle) => !handle.cleared);
@@ -237,10 +243,10 @@ const test = new vm.Script(`${source}
       type: 'error',
       code: 'empty_transcript',
       recoverable: true,
-      message: 'माफ़ कीजिए, मैं आपकी बात समझ नहीं पाई. कृपया दोबारा बोलिए.',
+      message: 'I could not understand that. Please try again.',
     }) });
     assert.equal(voiceBar.dataset.state, 'listening');
-    assert.ok(voiceStatus.textContent.includes('माफ़'));
+    assert.ok(voiceStatus.textContent.includes('understand'));
     assert.equal(conversation.children.length, chatChildrenBefore);
     assert.equal(voicePaused, false);
 
@@ -261,7 +267,7 @@ const test = new vm.Script(`${source}
     await loadSarvamKeyStatus();
     assert.equal(fetchState.calls.length, 1);
     assert.equal(fetchState.calls[0].method, 'GET');
-    assert.match(settingsStatus.textContent, /custom API key configured/i);
+    assert.match(settingsStatus.textContent, /custom API key is configured/i);
     assert.equal(settingsClearButton.disabled, false);
     assert.ok(!settingsStatus.textContent.includes('sk_'));
 
@@ -285,7 +291,10 @@ const test = new vm.Script(`${source}
     await saveSarvamKey({ preventDefault() {} });
     assert.equal(fetchState.calls.length, 1);
     assert.equal(fetchState.calls[0].method, 'POST');
-    assert.deepEqual(JSON.parse(fetchState.calls[0].body), { api_key: 'sk-new-custom-key' });
+    assert.deepEqual(JSON.parse(fetchState.calls[0].body), {
+      api_key: 'sk-new-custom-key',
+      client_id: clientId,
+    });
     assert.equal(settingsInput.value, '');
     assert.match(settingsStatus.textContent, /custom key saved/i);
     assert.equal(settingsClearButton.disabled, false);
@@ -296,7 +305,7 @@ const test = new vm.Script(`${source}
     await clearSarvamKey();
     assert.equal(fetchState.calls.length, 1);
     assert.equal(fetchState.calls[0].method, 'POST');
-    assert.deepEqual(JSON.parse(fetchState.calls[0].body), { api_key: '' });
+    assert.deepEqual(JSON.parse(fetchState.calls[0].body), { api_key: '', client_id: clientId });
     assert.equal(settingsClearButton.disabled, true);
     assert.match(settingsStatus.textContent, /custom key cleared/i);
 
@@ -306,7 +315,7 @@ const test = new vm.Script(`${source}
     await loadSarvamKeyStatus();
     assert.equal(fetchState.calls[0].method, 'GET');
     assert.equal(settingsClearButton.disabled, true);
-    assert.match(settingsStatus.textContent, /\.env/i);
+    assert.match(settingsStatus.textContent, /deployment default/i);
 
     // A page reload (status re-read) never replaces the saved custom key.
     fetchState.calls.length = 0;
@@ -315,7 +324,7 @@ const test = new vm.Script(`${source}
     assert.equal(fetchState.calls.length, 1);
     assert.equal(fetchState.calls[0].method, 'GET');
     assert.equal(settingsClearButton.disabled, false);
-    assert.match(settingsStatus.textContent, /custom API key configured/i);
+    assert.match(settingsStatus.textContent, /custom API key is configured/i);
     console.log('Settings key status, empty-save guard, clear flow, and masked statuses verified.');
   })()
 `);

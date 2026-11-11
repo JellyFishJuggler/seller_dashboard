@@ -128,7 +128,7 @@ class CallClosureTests(unittest.TestCase):
             {"speaker": "seller", "message_text": "That's all for today."},
         ]
         self.assertTrue(has_unanswered_assistant_question(history))
-        self.assertIn("सवाल", build_pending_question_offer("english"))
+        self.assertIn("question", build_pending_question_offer("english"))
         answered_history = history[:-1] + [
             {"speaker": "seller", "message_text": "No, the price is unchanged."},
             {"speaker": "assistant", "message_text": "Understood. We can review the order trend next."},
@@ -196,7 +196,7 @@ class CallClosureTests(unittest.TestCase):
         self.assertIn("ACT-001", final_msg)
         self.assertEqual(len(res["summary"]["agreed_actions"]), 1)
 
-    # 7. Goodbye language stays Hindi regardless of transcript language.
+    # 7. Voice calls close in Hindi; written calls close in English.
     def test_07_goodbye_is_hindi_for_every_input_language(self):
         hi_goodbye = build_final_goodbye("hindi")
         en_goodbye = build_final_goodbye("english")
@@ -205,10 +205,9 @@ class CallClosureTests(unittest.TestCase):
         self.assertIn("धन्यवाद", hi_goodbye)
         self.assertIn("अलविदा", hi_goodbye)
 
-        self.assertIn("धन्यवाद", en_goodbye)
-        self.assertIn("अलविदा", en_goodbye)
-        self.assertIn("धन्यवाद", hing_goodbye)
-        self.assertIn("अलविदा", hing_goodbye)
+        self.assertIn("Thank you", en_goodbye)
+        self.assertIn("Goodbye", en_goodbye)
+        self.assertIn("Thank you", hing_goodbye)
 
     # 8. TTS failure handling
     def test_08_tts_failure_handling(self):

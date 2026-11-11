@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from seller_dashboard.action_store import get_actions_by_session
 from seller_dashboard.assistant_style import ensure_hindi_response
-from seller_dashboard.bot import classify_text_language, detect_session_language
+
 from seller_dashboard.conversation_store import (
     get_conversation_history,
     save_message,
@@ -89,8 +89,10 @@ def has_unanswered_assistant_question(history: list[dict]) -> bool:
 
 
 def build_pending_question_offer(language: str | None) -> str:
-    """Offer to address the open question in Hindi before ending."""
-    return "कॉल समाप्त करने से पहले, क्या आप चाहेंगे कि मैं आपके पिछले सवाल का जवाब दे दूँ?"
+    """Offer to address the open question in the session's language."""
+    if language == "hindi":
+        return "कॉल समाप्त करने से पहले, क्या आप चाहेंगे कि मैं आपके पिछले सवाल का जवाब दे दूँ?"
+    return "Before we end the call, would you like me to answer your previous question?"
 
 
 def is_session_active(session_id: str) -> bool:
@@ -118,20 +120,22 @@ def reset_session_state(session_id: str) -> None:
         _SESSION_STATES.pop(str(session_id), None)
 
 
-def build_final_goodbye(language: str = "hinglish") -> str:
-    """Return the fixed Hindi closing goodbye."""
-    return "धन्यवाद! Snapdeal पर आपके business की प्रगति के लिए शुभकामनाएँ। आपका दिन अच्छा रहे। अलविदा!"
+def build_final_goodbye(language: str = "english") -> str:
+    """Return the fixed closing goodbye in the conversation language."""
+    if language == "hindi":
+        return "धन्यवाद! Snapdeal पर आपके business की प्रगति के लिए शुभकामनाएँ। आपका दिन अच्छा रहे। अलविदा!"
+    return "Thank you for speaking with Snapdeal. We wish you continued success. Goodbye!"
 
 
 def generate_final_spoken_summary(
     seller_id: str,
     session_id: str,
-    language: str = "hinglish",
+    language: str = "english",
     summary_record: dict | None = None,
     storage_status: dict | None = None,
 ) -> str:
     """Generate a concise, spoken final summary and honest save confirmation."""
-    norm_lang = "hindi"
+    norm_lang = "hindi" if language == "hindi" else "english"
     summary = summary_record or {}
     storage = storage_status or {"summary_saved": True, "transcript_saved": True}
 
@@ -145,16 +149,23 @@ def generate_final_spoken_summary(
         date = a.get("deadline") or a.get("reminder_date") or ""
         aid = a.get("action_id", "")
         if aid and date:
-            action_texts.append(f"Action ID {aid}, तारीख {date}")
+            action_texts.append(
+                f"Action ID {aid}, date {date}"
+                if norm_lang == "english"
+                else f"Action ID {aid}, तारीख {date}"
+            )
         elif aid:
             action_texts.append(f"Action ID {aid}")
 
-    actions_summary = " और ".join(action_texts)
+    actions_summary = (" and " if norm_lang == "english" else " और ").join(action_texts)
 
     # Storage confirmation text
     if storage.get("summary_saved") and storage.get("transcript_saved"):
         storage_note = (
-            "आपकी बातचीत का transcript और call summary सुरक्षित दर्ज हैं। "
+            "Your conversation transcript and call summary have been saved. "
+            "No email or notification was sent."
+            if norm_lang == "english"
+            else "आपकी बातचीत का transcript और call summary सुरक्षित दर्ज हैं। "
             "ध्यान दें कि कोई email या notification नहीं भेजा गया है।"
         )
     else:
@@ -162,9 +173,13 @@ def generate_final_spoken_summary(
         if not storage.get("summary_saved"):
             failed_parts.append("call summary")
         if not storage.get("transcript_saved"):
-            failed_parts.append("बातचीत का transcript")
-        failed_str = " और ".join(failed_parts)
-        storage_note = f"आपकी बातचीत सुरक्षित रही, लेकिन {failed_str} दर्ज नहीं हो सकी।"
+            failed_parts.append("conversation transcript" if norm_lang == "english" else "बातचीत का transcript")
+        failed_str = (" and " if norm_lang == "english" else " और ").join(failed_parts)
+        storage_note = (
+            f"The conversation is safe, but the {failed_str} could not be saved."
+            if norm_lang == "english"
+            else f"आपकी बातचीत सुरक्षित रही, लेकिन {failed_str} दर्ज नहीं हो सकी।"
+        )
 
     goodbye = build_final_goodbye(norm_lang)
 
@@ -174,13 +189,17 @@ def generate_final_spoken_summary(
     orders = metrics.get("orders", {}) if isinstance(metrics, dict) else {}
     if isinstance(sales, dict) and sales.get("last_month") is not None and sales.get("this_month") is not None:
         observations.append(
-            f"Sales पिछले महीने {sales['last_month']} रुपये थी और इस महीने {sales['this_month']} रुपये रही"
+            f"Sales were {sales['last_month']} last month and {sales['this_month']} this month"
+            if norm_lang == "english"
+            else f"Sales पिछले महीने {sales['last_month']} रुपये थी और इस महीने {sales['this_month']} रुपये रही"
         )
     if isinstance(orders, dict) and orders.get("last_month") is not None and orders.get("this_month") is not None:
         observations.append(
-            f"Orders पिछले महीने {orders['last_month']} थे और इस महीने {orders['this_month']} रहे"
+            f"Orders were {orders['last_month']} last month and {orders['this_month']} this month"
+            if norm_lang == "english"
+            else f"Orders पिछले महीने {orders['last_month']} थे और इस महीने {orders['this_month']} रहे"
         )
-    main_observation = "; ".join(observations[:2])
+    main_observation = ("; " if norm_lang == "english" else "; ").join(observations[:2])
 
     # Compose language-specific spoken summary
     if norm_lang == "hindi":
@@ -189,7 +208,14 @@ def generate_final_spoken_summary(
             parts.append(f"आपका सहमत follow-up action दर्ज है: {actions_summary}।")
         parts.append(storage_note)
         parts.append(goodbye)
-    return ensure_hindi_response(" ".join(parts))
+        return ensure_hindi_response(" ".join(parts))
+
+    parts = [f"Today we discussed {main_observation}." if main_observation else "Today we reviewed your available business information."]
+    if actions_summary:
+        parts.append(f"Your agreed follow-up is recorded: {actions_summary}.")
+    parts.append(storage_note)
+    parts.append(goodbye)
+    return " ".join(parts)
 
 
 def finalize_call_session(
@@ -203,6 +229,7 @@ def finalize_call_session(
     defer_completion: bool = False,
 ) -> dict:
     """Execute the end-to-end call finalization workflow atomically and idempotently."""
+    voice_channel = channel == "voice"
     norm_seller = normalize_seller_id(seller_id) or "SD-DEFAULT"
     norm_session = str(session_id or "").strip()
 
@@ -211,7 +238,10 @@ def finalize_call_session(
             "success": False,
             "status": "failed",
             "error": "session_id_required",
-            "message": "Call पूरी करने के लिए session की पहचान उपलब्ध नहीं है।",
+            "message": (
+                "Call पूरी करने के लिए session की पहचान उपलब्ध नहीं है।"
+                if voice_channel else "A session ID is required to finalize the call."
+            ),
         }
 
     # Step 1: Idempotency check & mark session as finalizing
@@ -227,7 +257,15 @@ def finalize_call_session(
                 "session_id": norm_session,
                 "summary": existing_summary,
                 "final_message": _saved_final_message(norm_session, norm_seller, channel, path_conversations),
-                "message": "यह call पहले ही पूरी हो चुकी है।" if existing_summary and existing_summary.get("call_status") == "completed" else "पूरी हुई call की summary की पुष्टि नहीं हो सकी।",
+                "message": (
+                    "यह call पहले ही पूरी हो चुकी है।"
+                    if voice_channel and existing_summary and existing_summary.get("call_status") == "completed"
+                    else "पूरी हुई call की summary की पुष्टि नहीं हो सकी।"
+                    if voice_channel
+                    else "This call is already complete."
+                    if existing_summary and existing_summary.get("call_status") == "completed"
+                    else "Could not verify the completed call summary."
+                ),
             }
         if current_state == "finalizing":
             logger.info("Session %s is already being finalized.", norm_session)
@@ -237,7 +275,10 @@ def finalize_call_session(
                 "seller_id": norm_seller,
                 "session_id": norm_session,
                 "error": "finalization_in_progress",
-                "message": "Call पूरी करने की प्रक्रिया पहले से जारी है।",
+                "message": (
+                    "Call पूरी करने की प्रक्रिया पहले से जारी है।"
+                    if voice_channel else "Call finalization is already in progress."
+                ),
             }
         _SESSION_STATES[norm_session] = "finalizing"
 
@@ -250,20 +291,14 @@ def finalize_call_session(
                 "success": False,
                 "status": "failed",
                 "error": "empty_conversation",
-                "message": "बातचीत उपलब्ध नहीं है, इसलिए call पूरी नहीं की जा सकती।",
+                "message": (
+                    "बातचीत उपलब्ध नहीं है, इसलिए call पूरी नहीं की जा सकती।"
+                    if voice_channel else "The call cannot be finalized because no conversation was found."
+                ),
             }
 
         # Determine session language
-        detected_lang = language
-        if not detected_lang:
-            seller_messages = [
-                item for item in history
-                if item.get("speaker") == "seller"
-                and not is_call_termination_intent(item.get("message_text", ""))
-            ]
-            detected_lang = classify_text_language(
-                seller_messages[-1].get("message_text", "") if seller_messages else history[-1].get("message_text", "")
-            ) or "hinglish"
+        detected_lang = "hindi" if channel == "voice" else "english"
 
         # Step 3: Retrieve seller actions
         actions = get_actions_by_session(norm_session, norm_seller, path=path_actions)
@@ -274,6 +309,7 @@ def finalize_call_session(
             session_id=norm_session,
             path=path_summaries,
             call_status="finalizing",
+            language=detected_lang,
         )
 
         if not summary_result.get("success"):
@@ -282,7 +318,10 @@ def finalize_call_session(
                 "success": False,
                 "status": "failed",
                 "error": summary_result.get("error", "summary_generation_failed"),
-                "message": "Call summary तैयार नहीं हो सकी।",
+                "message": (
+                    "Call summary तैयार नहीं हो सकी।"
+                    if voice_channel else "Could not generate the call summary."
+                ),
             }
 
         # Step 5: Verify summary persistence on disk
@@ -293,7 +332,10 @@ def finalize_call_session(
                 "success": False,
                 "status": "failed",
                 "error": "summary_verification_failed",
-                "message": "Call summary सुरक्षित दर्ज होने की पुष्टि नहीं हो सकी।",
+                "message": (
+                    "Call summary सुरक्षित दर्ज होने की पुष्टि नहीं हो सकी।"
+                    if voice_channel else "Could not verify that the call summary was saved."
+                ),
             }
 
         storage_status = {
@@ -353,7 +395,15 @@ def finalize_call_session(
             "summary": verified_summary,
             "final_message": final_spoken,
             "language": detected_lang,
-            "message": "Call summary तैयार है; closing audio चलने की पुष्टि बाकी है।" if defer_completion else "Call सफलतापूर्वक पूरी और सुरक्षित दर्ज हो गई है।",
+            "message": (
+                "Call summary तैयार है; closing audio चलने की पुष्टि बाकी है।"
+                if voice_channel and defer_completion
+                else "Call सफलतापूर्वक पूरी और सुरक्षित दर्ज हो गई है।"
+                if voice_channel
+                else "Call summary is ready; waiting for closing audio playback."
+                if defer_completion
+                else "Call successfully finalized and saved."
+            ),
         }
     except Exception as exc:
         logger.exception("Finalization failed for session %s: %s", norm_session, exc)
@@ -362,7 +412,10 @@ def finalize_call_session(
             "success": False,
             "status": "failed",
             "error": "finalization_exception",
-            "message": "तकनीकी समस्या के कारण call पूरी नहीं हो सकी। आपके सहेजे गए रिकॉर्ड सुरक्षित हैं।",
+            "message": (
+                "तकनीकी समस्या के कारण call पूरी नहीं हो सकी। आपके सहेजे गए रिकॉर्ड सुरक्षित हैं।"
+                if voice_channel else "A technical issue prevented call finalization. Saved records are safe."
+            ),
         }
 
 

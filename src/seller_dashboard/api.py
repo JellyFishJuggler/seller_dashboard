@@ -3,12 +3,10 @@ from fastapi.responses import JSONResponse
 from sarvamai import RealtimeAudioInput, RealtimeEnd
 from fastapi.middleware.cors import CORSMiddleware
 from websockets.exceptions import ConnectionClosed
-from seller_dashboard.bot import apply_sarvam_api_key, classify_text_language, graph, llm
+from seller_dashboard.bot import graph
 from seller_dashboard.sarvam_credentials import (
-    build_sarvam_client_report,
-    get_sarvam_api_key,
-    get_sarvam_key_status,
-    set_custom_sarvam_api_key,
+    get_client_sarvam_key_status,
+    set_client_sarvam_api_key,
 )
 from pydantic import BaseModel
 import anyio
@@ -103,9 +101,11 @@ class VoiceRequest(BaseModel):
     session_id:str
     seller_id:str
     message:str
+    client_id: str = ""
 
 
 class SarvamKeyRequest(BaseModel):
+    client_id: str
     api_key: str = ""
 
 
@@ -114,69 +114,33 @@ def home():
     return {"message":"SnapDeal Seller API is running."}
 
 
-def _sarvam_client_diagnostics() -> dict:
-    """Report credential consistency without exposing the key."""
-    status = get_sarvam_key_status()
-    active_key = get_sarvam_api_key()
-    source = {
-        "custom": "custom",
-        "env": "environment",
-        "none": "none",
-    }.get(status.get("source"), "none")
-
-    report = build_sarvam_client_report(
-        {
-            "stt": voiceAssistant.stt_client,
-            "tts": voiceAssistant.tts_client,
-            "llm_sync": llm.client,
-            "llm_async": llm.async_client,
-        },
-        active_key,
-    )
-    report["active_key_source"] = source
-    report["active_key_configured"] = status.get("configured", False)
-    clients = report["clients"]
-    # Flat per-client key sources, mirroring active_key_source. The LLM entry
-    # reports "mixed" when its sync and async clients hold different keys.
-    llm_sync_source = clients["llm_sync"]["key_source"]
-    llm_async_source = clients["llm_async"]["key_source"]
-    report["llm_key_source"] = (
-        llm_sync_source if llm_sync_source == llm_async_source else "mixed"
-    )
-    report["stt_key_source"] = clients["stt"]["key_source"]
-    report["tts_key_source"] = clients["tts"]["key_source"]
-    report["summary"] = {
-        "stt_uses_active_key": clients["stt"]["matches_active_key"] is True,
-        "tts_uses_active_key": clients["tts"]["matches_active_key"] is True,
-        "llm_uses_active_key": (
-            clients["llm_sync"]["matches_active_key"] is True
-            and clients["llm_async"]["matches_active_key"] is True
-        ),
-        "has_stale_clients": bool(report["stale_clients"]),
-    }
-    return report
-
-
 @app.get('/settings/sarvam-key')
-def read_sarvam_key_status():
-    """Return only a masked status; the key itself never leaves the backend."""
-    return get_sarvam_key_status()
+def read_sarvam_key_status(client_id: str):
+    """Return only the masked key status for the requesting browser profile."""
+    return get_client_sarvam_key_status(client_id)
 
 
 @app.get('/settings/sarvam-key/diagnostics')
-def read_sarvam_key_diagnostics():
-    """Report which active key source each Sarvam client is using."""
-    return _sarvam_client_diagnostics()
+def read_sarvam_key_diagnostics(client_id: str):
+    """Report browser-profile key selection without exposing credentials."""
+    status = get_client_sarvam_key_status(client_id)
+    return {
+        "client_key_source": status["source"],
+        "client_key_configured": status["configured"],
+        "scope": "browser_profile",
+        "clients": "created for each request",
+    }
 
 
 @app.post('/settings/sarvam-key')
 def update_sarvam_key(request: SarvamKeyRequest):
     """Save, replace, or clear the custom Sarvam key.
 
-    An empty value clears the custom key and falls back to the .env key.
+    An empty value clears only this browser profile's override and falls back to the
+    deployment-configured key.
     """
     try:
-        status = set_custom_sarvam_api_key(request.api_key)
+        status = set_client_sarvam_api_key(request.client_id, request.api_key)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except OSError as error:
@@ -189,38 +153,16 @@ def update_sarvam_key(request: SarvamKeyRequest):
             status_code=500,
             detail=(
                 "The backend cannot write its private API-key storage (neither "
-                "the per-user app-data location nor the project private/ "
+                "the app-data location nor the project private/ "
                 "directory is writable). Set SARVAM_CREDENTIALS_PATH to a "
                 "writable persistent file path for this backend, then try again."
             ),
         ) from error
 
-    selected_key = get_sarvam_api_key()
-    if selected_key:
-        try:
-            apply_sarvam_api_key(selected_key)
-            voiceAssistant.refresh_clients(selected_key)
-        except Exception:
-            logger.error("Could not apply the updated Sarvam API key")
-            raise HTTPException(
-                status_code=500,
-                detail="The API key was saved but could not be applied. Check the backend configuration.",
-            )
-
-    diagnostics = _sarvam_client_diagnostics()
     logger.info(
-        "Sarvam clients refreshed source=%s all_match=%s stale=%s unknown=%s",
-        diagnostics["active_key_source"],
-        diagnostics["all_clients_match_active_key"],
-        diagnostics["stale_clients"],
-        diagnostics["unknown_clients"],
+        "Saved browser-profile Sarvam key source=%s",
+        status["source"],
     )
-    if diagnostics["stale_clients"]:
-        logger.warning(
-            "Sarvam clients still hold stale credentials: %s",
-            diagnostics["stale_clients"],
-        )
-
     return status
 
 @app.post('/chat')
@@ -230,7 +172,13 @@ def chat(request:VoiceRequest):
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
 
     register_session_seller(request.session_id, request.seller_id)
-    config = {"configurable": {"thread_id": request.session_id, "seller_id": request.seller_id}}
+    config = {
+        "configurable": {
+            "thread_id": request.session_id,
+            "seller_id": request.seller_id,
+            "client_id": request.client_id or request.session_id,
+        }
+    }
 
     if not is_session_active(request.session_id):
         raise HTTPException(status_code=400, detail="This conversation session has already ended.")
@@ -254,7 +202,7 @@ def chat(request:VoiceRequest):
         )
         return {
             "seller_id": request.seller_id,
-            "message": finalization.get("final_message", "धन्यवाद! आपका दिन अच्छा रहे। अलविदा!"),
+            "message": finalization.get("final_message", "Thank you for speaking with Snapdeal. Goodbye!"),
             "call_ended": finalization.get("success", False),
             "status": finalization.get("status", "failed"),
             "error": finalization.get("error"),
@@ -266,6 +214,7 @@ def chat(request:VoiceRequest):
         The seller's message is: {request.message}
     """
 
+    config["configurable"]["voice_mode"] = False
     events = graph.stream({"messages":[HumanMessage(user_message)]}, config, stream_mode='values')
     final_mesg = None
 
@@ -427,12 +376,16 @@ _STT_AUTH_MARKERS = (
 )
 
 
-def _stt_failure_payload(code: str, detail: str = "") -> tuple[str, str]:
+def _stt_failure_payload(
+    code: str,
+    detail: str = "",
+    client_id: str = "",
+) -> tuple[str, str]:
     """Classify a fatal STT failure without exposing credentials."""
     text = f"{code or ''} {detail or ''}".lower()
 
     if any(marker in text for marker in _STT_QUOTA_MARKERS):
-        if get_sarvam_key_status().get("source") == "custom":
+        if get_client_sarvam_key_status(client_id).get("source") == "custom":
             message = (
                 "सहेजी गई custom API key की speech recognition सीमा पूरी हो गई है। "
                 "उसका API plan या credits जाँचें, या Settings में custom key हटाकर "
@@ -458,7 +411,12 @@ def _stt_failure_payload(code: str, detail: str = "") -> tuple[str, str]:
 
 
 @app.websocket("/voice/{session_id}")
-async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""):
+async def voice_input(
+    websocket: WebSocket,
+    session_id: str,
+    seller_id: str = "",
+    client_id: str = "",
+):
 
     await websocket.accept()
     logger.info("Voice WebSocket session started session_id=%s", session_id)
@@ -508,6 +466,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
         code, message = _stt_failure_payload(
             stt_failure["code"],
             stt_failure["detail"],
+            client_id,
         )
         logger.warning(
             "Sarvam STT unavailable session_id=%s code=%s",
@@ -560,7 +519,12 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
 
             final_reply = result.get("final_message")
             try:
-                audio_bytes = await asyncio.to_thread(voiceAssistant.generate_audio, final_reply, session_id)
+                audio_bytes = await asyncio.to_thread(
+                    voiceAssistant.generate_audio,
+                    final_reply,
+                    session_id,
+                    client_id or session_id,
+                )
             except Exception as err:
                 fail_call_finalization(current_seller, session_id, f"TTS failed: {type(err).__name__}")
                 finalization_started.clear()
@@ -639,7 +603,10 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
             await websocket.close(code=1000, reason="Call completed")
 
     try:
-        async with voiceAssistant.connect_stt(session_id) as sarvam_ws:
+        async with voiceAssistant.connect_stt(
+            session_id,
+            client_id or session_id,
+        ) as sarvam_ws:
             stt_started = True
             # Tell the browser that speech recognition is actually available.
             # A connected microphone alone is not proof that STT works.
@@ -651,6 +618,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                         voiceAssistant.generate_response,
                         transcript,
                         session_id,
+                        client_id or session_id,
                     )
                     if not has_nonempty_text(reply):
                         raise EmptyAssistantResponseError(
@@ -673,6 +641,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                         voiceAssistant.generate_audio,
                         reply,
                         session_id,
+                        client_id or session_id,
                     )
                     await websocket.send_json({
                         "type": "assistant_reply",
@@ -935,12 +904,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                             })
                             history = get_conversation_history(session_id, current_seller)
                             if has_unanswered_assistant_question(history):
-                                prior_seller = next((
-                                    row.get("message_text", "") for row in reversed(history[:-1])
-                                    if row.get("speaker") == "seller"
-                                    and not is_call_termination_intent(row.get("message_text", ""))
-                                ), "")
-                                language = classify_text_language(prior_seller) or "hinglish"
+                                language = "hindi"
                                 offer = build_pending_question_offer(language)
                                 saved_offer = save_message(
                                     seller_id=current_seller,
@@ -953,7 +917,10 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                                 if saved_offer.get("saved") or saved_offer.get("duplicate"):
                                     try:
                                         offer_audio = await asyncio.to_thread(
-                                            voiceAssistant.generate_audio, offer, session_id
+                                            voiceAssistant.generate_audio,
+                                            offer,
+                                            session_id,
+                                            client_id or session_id,
                                         )
                                         await websocket.send_json({"type": "assistant_reply", "text": offer})
                                         await websocket.send_bytes(offer_audio)
@@ -1091,7 +1058,11 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
             type(error).__name__,
         )
         if not stt_started:
-            code, message = _stt_failure_payload("", str(error))
+            code, message = _stt_failure_payload(
+                "",
+                str(error),
+                client_id or session_id,
+            )
             try:
                 await websocket.send_json({
                     "type": "error",

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from seller_dashboard.assistant_style import FEMININE_VOICE_PROMPT
-from seller_dashboard.bot import SYSTEM_PROMPT, SarvamLLMUnavailable
+from seller_dashboard.bot import SYSTEM_PROMPT, SarvamLLMUnavailable, language_policy
 from seller_dashboard.voice import VoiceAssistant
 
 
@@ -29,7 +29,8 @@ class FeminineVoiceTests(unittest.TestCase):
             return assistant.generate_response(transcript, "style-test")
 
     def test_system_prompt_requires_feminine_hindi_grammar(self):
-        self.assertIn(FEMININE_VOICE_PROMPT, SYSTEM_PROMPT)
+        self.assertNotIn(FEMININE_VOICE_PROMPT, SYSTEM_PROMPT)
+        self.assertIn(FEMININE_VOICE_PROMPT, language_policy(voice_mode=True))
         for form in ("मैं समझ सकती हूँ", "मैं जाँच कर रही हूँ"):
             self.assertIn(form, FEMININE_VOICE_PROMPT)
         self.assertIn("Never use masculine", FEMININE_VOICE_PROMPT)

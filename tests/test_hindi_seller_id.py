@@ -91,7 +91,7 @@ class HindiSellerIdentificationTests(unittest.TestCase):
                 return AIMessage(content="कृपया अपना Seller ID बताएँ।")
 
         thread_id = f"spoken-seller-{uuid4()}"
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {"configurable": {"thread_id": thread_id, "voice_mode": True}}
         with (
             patch.object(bot, "llm", FakeModel()),
             patch.object(bot, "_rag_retriever", EmptyRetriever()),
@@ -136,7 +136,10 @@ class HindiSellerIdentificationTests(unittest.TestCase):
             graph = bot.build_graph()
             result = graph.invoke(
                 {"messages": [HumanMessage(content="nine nine nine nine nine")]},
-                {"configurable": {"thread_id": f"invalid-seller-{uuid4()}"}},
+                {"configurable": {
+                    "thread_id": f"invalid-seller-{uuid4()}",
+                    "voice_mode": True,
+                }},
             )
 
         self.assertIn("मेरे रिकॉर्ड में नहीं मिली", result["messages"][-1].content)
@@ -144,21 +147,21 @@ class HindiSellerIdentificationTests(unittest.TestCase):
 
     def test_hindi_output_policy_and_call_fallbacks_ignore_input_language(self):
         for input_language in ("english", "hindi", "hinglish"):
-            policy = bot.language_policy(input_language)
+            policy = bot.language_policy(input_language, voice_mode=True)
             self.assertIn("Hindi", policy)
             self.assertNotIn("Respond in natural, professional English", policy)
             self.assertNotIn("Respond in conversational Hinglish", policy)
 
         self.assertEqual(ensure_hindi_response("Your orders increased."), HINDI_RESPONSE_FALLBACK)
-        self.assertIn("धन्यवाद", build_final_goodbye("english"))
-        self.assertNotIn("Thank you", build_final_goodbye("english"))
+        self.assertIn("धन्यवाद", build_final_goodbye("hindi"))
+        self.assertIn("Thank you", build_final_goodbye("english"))
         summary = generate_final_spoken_summary(
             "SD-12345",
             "hindi-summary",
             language="english",
         )
-        self.assertIn("आज", summary)
-        self.assertNotIn("Today", summary)
+        self.assertIn("Today", summary)
+        self.assertNotIn("आज", summary)
 
     def test_cancellation_tool_marks_product_reason_data_as_assumed(self):
         breakdown = get_cancellation_breakdown.invoke({"seller_id": "SD-12345"})

@@ -5,8 +5,8 @@ knows your numbers, and helps you grow your business.
 
 Load your seller ID and simply talk to **Sarika**, your AI account manager.
 She reviews your sales, spots problems, explains what's going on in simple
-words, and helps you plan the next step — in Hindi, English or Hinglish,
-whichever you prefer.
+words, and helps you plan the next step. Voice replies are always in
+conversational Hindi; written portal and chat content remain in English.
 
 ## What you can do
 
@@ -14,7 +14,8 @@ whichever you prefer.
 - Start a voice call with one tap — just speak naturally, she listens and
   replies in a warm, human voice.
 - A live transcript runs alongside the call, so you can read along.
-- She replies in your language — Hindi (Devanagari), English, or Hinglish.
+- Speak in Hindi, English, or Hinglish; voice replies and the assistant's
+  transcript are always in Hindi (Devanagari).
 - End the call the way you naturally would — "बस आज के लिए इतना ही" or
   "that's all for today" — and she wraps up politely with a quick recap.
 - If anything hiccups mid-call, she recovers gracefully instead of going
@@ -64,7 +65,8 @@ whichever you prefer.
 ### 🔑 Use your own API key
 - The assistant runs on Sarvam AI. A demo key is already included, or you
   can add your own from Settings.
-- Your saved key always takes priority over the default one.
+- Your custom key applies only to this browser profile; it does not replace
+  the deployment key or another profile's custom key.
 - A saved key is never displayed again — only a masked status is shown —
   and you can clear it anytime to go back to the default.
 

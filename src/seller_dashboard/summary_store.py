@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from seller_dashboard.action_store import get_actions_by_session
 from seller_dashboard.assistant_style import (
+    ENGLISH_RESPONSE_PROMPT,
     FEMININE_VOICE_PROMPT,
     ensure_hindi_response,
 )
@@ -315,6 +316,7 @@ def generate_call_summary(
     llm: Any = None,
     path: Path | None = None,
     call_status: str = "completed",
+    language: str = "english",
 ) -> dict:
     """Generate a structured, evidence-grounded call summary and persist it to CSV."""
     norm_seller = normalize_seller_id(seller_id)
@@ -492,32 +494,51 @@ def generate_call_summary(
     unresolved_questions = list(dict.fromkeys(unresolved_questions))
 
     # 6. Overall summary prose
-    overall_summary = (
-        f"Seller {norm_seller} ({business_overview.get('business_name', 'Snapdeal Seller')}, "
-        f"{business_overview.get('category', 'श्रेणी')}) की बातचीत में प्रदर्शन से जुड़े "
-        f"{len(messages)} संदेशों की समीक्षा की गई। {len(agreed_actions)} सहमत action दर्ज हैं। "
-        f"{business_overview.get('observations', '')}"
-    )
+    norm_language = "hindi" if language == "hindi" else "english"
+    if norm_language == "hindi":
+        overall_summary = (
+            f"Seller {norm_seller} ({business_overview.get('business_name', 'Snapdeal Seller')}, "
+            f"{business_overview.get('category', 'श्रेणी')}) की बातचीत में प्रदर्शन से जुड़े "
+            f"{len(messages)} संदेशों की समीक्षा की गई। {len(agreed_actions)} सहमत action दर्ज हैं। "
+            f"{business_overview.get('observations', '')}"
+        )
+    else:
+        overall_summary = (
+            f"Reviewed {len(messages)} performance-related messages for seller {norm_seller} "
+            f"({business_overview.get('business_name', 'Snapdeal Seller')}, "
+            f"{business_overview.get('category', 'category')}). "
+            f"{len(agreed_actions)} agreed actions are recorded. "
+            f"{business_overview.get('observations', '')}"
+        )
 
     # 7. LLM integration (if an LLM instance is provided and healthy)
     if llm is not None:
         try:
+            language_instructions = (
+                "इस कॉल का 2-3 वाक्यों में संक्षिप्त summary स्वाभाविक हिंदी (देवनागरी) में लिखें।\n"
+                f"{FEMININE_VOICE_PROMPT}"
+                if norm_language == "hindi"
+                else "Write a concise, professional 2-3 sentence summary in English.\n"
+                f"{ENGLISH_RESPONSE_PROMPT}"
+            )
             prompt = (
-                f"आप Snapdeal की महिला KAM सहायक हैं। इस कॉल का 2-3 वाक्यों में संक्षिप्त, "
-                f"पेशेवर summary केवल स्वाभाविक हिंदी (देवनागरी) में लिखें।\n"
+                f"{language_instructions}\n"
                 f"Seller: {norm_seller} ({business_overview.get('business_name')})\n"
                 f"Metrics: {json.dumps(key_metrics, ensure_ascii=False)}\n"
                 f"Actions: {json.dumps(agreed_actions, ensure_ascii=False)}\n"
                 f"Conversation turns: {len(messages)}\n"
-                f"नियम: कोई metric या margin न गढ़ें। यह दावा न करें कि email भेजा गया।\n"
-                f"{FEMININE_VOICE_PROMPT}"
+                "Do not invent metrics or margins. Do not claim that an email was sent."
             )
             llm_response = llm.invoke(prompt)
             content = getattr(llm_response, "content", None)
             if content and isinstance(content, str) and content.strip():
                 # Validate that LLM did not invent fake margin/profit
                 if "profit margin is" not in content.lower():
-                    overall_summary = ensure_hindi_response(content)
+                    overall_summary = (
+                        ensure_hindi_response(content)
+                        if norm_language == "hindi"
+                        else content.strip()
+                    )
         except Exception as exc:
             logger.warning("LLM call summary generation failed; using grounded fallback. Error: %s", exc)
 

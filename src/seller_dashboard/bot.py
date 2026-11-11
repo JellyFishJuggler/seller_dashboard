@@ -25,11 +25,16 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from seller_dashboard.assistant_style import (
+    ENGLISH_RESPONSE_PROMPT,
     FEMININE_VOICE_PROMPT,
     ensure_hindi_response,
 )
 from seller_dashboard.rag import RAGRetriever, get_retriever
-from seller_dashboard.sarvam_credentials import get_sarvam_api_key
+from seller_dashboard.sarvam_credentials import (
+    get_default_sarvam_api_key,
+    get_client_sarvam_api_key,
+    get_sarvam_api_key,
+)
 from seller_dashboard.voice_diagnostics import (
     EmptyTranscriptError,
     extract_request_id,
@@ -58,10 +63,10 @@ from seller_dashboard.tools import (
 SYSTEM_PROMPT = """
 IDENTITY AND TONE:
 You are Sarika, Snapdeal's professional, approachable, and friendly Key Account Manager. 
-Always introduce yourself naturally as "सारिका" from Snapdeal when starting a fresh interaction (e.g., "नमस्ते, मैं Snapdeal से सारिका बोल रही हूँ").
-Be warm, conversational, clear, and confident. Address the seller respectfully using "आप". 
+Introduce yourself naturally as Sarika from Snapdeal when starting a fresh interaction, using the response language.
+Be warm, conversational, clear, and confident. Address the seller respectfully.
 Never infer or refer to the seller's gender.
-Use natural, polite conversational Hindi phrasing (in Devanagari script). Keep the tone warm and supportive like a real human advisor—avoid robotic, overly formal, or scripted phrasing. Never use overfamiliar terms like "dost", "bhai", "yaad hai na", or "take care". Avoid filler and excessive emotion.
+Use natural, polite conversational phrasing in the response language. Keep the tone warm and supportive like a real human advisor—avoid robotic, overly formal, or scripted phrasing. Never use overfamiliar terms like "dost", "bhai", "yaad hai na", or "take care". Avoid filler and excessive emotion.
 
 CONVERSATION:
 Keep spoken replies to 1-3 short, natural sentences and focus on one point at a time. Ask at most one relevant question, only when its answer could change the diagnosis or next action. Review all prior seller replies before asking; never repeat a question or request data already available through tools. Acknowledge the answer warmly and continue from it. Do not use generic discovery questions after a concern is clear. If evidence is sufficient, give a concise recommendation instead of continuing the questionnaire.
@@ -81,7 +86,7 @@ DIAGNOSTIC REASONING:
 Prioritise one issue at a time by impact, urgency, practical ease and evidence strength. Separate measured facts, hypotheses, missing information and confirmed causes. Correlation is not proof: stockouts, price changes or visibility must not be described as causes unless supported. A rising cancellation rate does not establish who cancelled or why. If cancellations and stockouts both rise, stock mismatch is a hypothesis; ask one unanswered question that can test it.
 
 PROACTIVE CONSULTATION:
-When seller data and a diagnostic brief are supplied, begin with the highest priority measured observation naturally, even if the seller only gave their Seller ID (after introducing yourself as Sarika). Briefly distinguish the observed change from a possible explanation in plain language, then ask exactly one contextual follow-up question that is not answered in the history or by the tools. Do not ask the seller for metrics already supplied. If no material issue is supported, say that briefly and ask what business goal they would like to focus on. Keep the opening concise and in Hindi.
+When seller data and a diagnostic brief are supplied, begin with the highest priority measured observation naturally, even if the seller only gave their Seller ID (after introducing yourself as Sarika). Briefly distinguish the observed change from a possible explanation in plain language, then ask exactly one contextual follow-up question that is not answered in the history or by the tools. Do not ask the seller for metrics already supplied. If no material issue is supported, say that briefly and ask what business goal they would like to focus on.
 
 For sales diagnosis, compare sales, orders and ASP together. Rising or stable orders with falling ASP may indicate a price or product-mix change; it does not prove either. Ask about recent price changes, discounts or product mix only if not already answered. If orders fall while ASP is stable, price is unlikely to be the primary explanation. If orders rise while ASP falls, state both facts; do not call orders down or infer that profitability improved or worsened.
 
@@ -90,13 +95,10 @@ Before recommending any specific price change, establish the product's current s
 For inventory, prioritize returned products using their historical order counts and the explicit bestseller flag when present. Historical orders are only a relative signal. A bestseller flag is a field in the available mock record, not proof of current popularity; describe it as a record flag and do not infer it from a small number of orders. Never promise demand or sales recovery after restocking, and never prescribe a stock quantity without sufficient data.
 
 SELLER IDENTIFICATION:
-If no valid seller profile is loaded, politely ask for the Seller ID in Hindi. Accept digit-by-digit English or Hindi number words and digit forms. If the ID is invalid or unclear, ask the seller to repeat it in Hindi; never invent or guess an ID. Once a valid profile is loaded, do not ask for its ID again.
+If no valid seller profile is loaded, politely ask for the Seller ID in the response language. Accept digit-by-digit English or Hindi number words and digit forms. If the ID is invalid or unclear, ask the seller to repeat it in the response language; never invent or guess an ID. Once a valid profile is loaded, do not ask for its ID again.
 
 CANCELLATION DATA:
-Use get_cancellation_breakdown when asked for cancellation counts, product-level cancellations, or cancellation reasons. Product-level cancellation reasons are assumed mock data, not verified Snapdeal platform facts. State this clearly in Hindi before discussing those reasons. Never present assumed reasons as verified facts.
-
-LANGUAGE AND SPEECH:
-Always respond in natural, professional Hindi using Devanagari, regardless of the seller's language. Keep common business terms such as cancellation rate, inventory, stock, orders, Seller ID, and product names in English when natural, but construct sentences in Hindi. Use feminine first-person grammar. This applies to every answer, greeting, question, recommendation, confirmation, error, and fallback. Never switch to English or Hinglish. Use short, human-sounding, TTS-friendly sentences. Do not output Markdown, bullets or tables.
+Use get_cancellation_breakdown when asked for cancellation counts, product-level cancellations, or cancellation reasons. Product-level cancellation reasons are assumed mock data, not verified Snapdeal platform facts. State this clearly in the response language before discussing those reasons. Never present assumed reasons as verified facts.
 
 RECOMMENDATIONS AND ACTIONS:
 When evidence is sufficient, use get_playbook and give no more than 2-3 practical, relevant actions. Present general guidance as helpful suggestions, not rigid promises. Ask one concise question about the next step naturally; do not overwhelm the seller. Record only evidence-backed findings with record_findings.
@@ -107,7 +109,7 @@ We record follow-up actions and reminders in persistent CSV storage (data/action
 - State clearly and reassuringly that the information has been securely stored and the relevant authorities will take care of it and keep the seller updated.
 - NEVER create an action without explicit seller consent.
 - If the seller mentions wanting a reminder or follow-up action but does not provide an exact date, ask for the date politely. Never invent a deadline or reminder date.
-- Confirm the action details conversationally with the seller before saving (for example: "क्या मैं 2 December के लिए इसका follow-up reminder record कर दूँ?").
+- Confirm the action details conversationally with the seller before saving.
 - Save the action with create_action ONLY after the seller explicitly confirms (e.g. "हाँ").
 - Put the confirmed date in ISO format (YYYY-MM-DD) in details or reminder_date. Resolve relative dates using the current India date in context.
 - After create_action succeeds, report its Action ID (e.g. ACT-001) and confirmed date nicely, and state clearly that the information has been saved and the authorities will keep them updated.
@@ -115,7 +117,7 @@ We record follow-up actions and reminders in persistent CSV storage (data/action
 - Use update_action_status to update an action's status (Pending, Completed, Cancelled) when the seller requests it.
 """
 
-SYSTEM_PROMPT = SYSTEM_PROMPT.rstrip() + "\n\n" + FEMININE_VOICE_PROMPT
+SYSTEM_PROMPT = SYSTEM_PROMPT.rstrip()
 
 prompt = ChatPromptTemplate.from_template("""
 Use this retrieved knowledge-base context as general guidance for the
@@ -200,9 +202,9 @@ def detect_session_language(messages: list) -> str:
     return current or "hinglish"
 
 
-def language_policy(_language: str = "hindi") -> str:
-    """Return the fixed output-language policy, independent of seller input."""
-    return FEMININE_VOICE_PROMPT
+def language_policy(_language: str = "english", voice_mode: bool = False) -> str:
+    """Keep written chat English; voice-call replies use the fixed Hindi style."""
+    return FEMININE_VOICE_PROMPT if voice_mode else ENGLISH_RESPONSE_PROMPT
 
 
 def india_date_context() -> str:
@@ -554,10 +556,7 @@ tools = [
 # )
 
 _llm_lock = threading.Lock()
-_llm_key = get_sarvam_api_key()
-if not _llm_key:
-    raise ValueError("SARVAM_API_KEY not found in .env or backend settings.")
-
+_llm_key = get_default_sarvam_api_key()
 
 def build_sarvam_llm(api_key: str) -> ChatSarvam:
     """Build a Sarvam chat model bound to one API key."""
@@ -576,7 +575,7 @@ def build_sarvam_llm(api_key: str) -> ChatSarvam:
     )
 
 
-llm = build_sarvam_llm(_llm_key)
+llm = build_sarvam_llm(_llm_key) if _llm_key else None
 
 
 def apply_sarvam_api_key(api_key: str | None = None) -> str:
@@ -586,20 +585,23 @@ def apply_sarvam_api_key(api_key: str | None = None) -> str:
     clients applies the key to every subsequent turn without rebuilding the
     graph or losing conversation state.
     """
-    global _llm_key
+    global _llm_key, llm
     key = (api_key or get_sarvam_api_key() or "").strip()
     if not key:
         raise ValueError("No Sarvam API key is configured.")
     with _llm_lock:
         if key != _llm_key:
-            llm.client = SarvamAI(
-                api_subscription_key=key,
-                timeout=LLM_HTTP_TIMEOUT,
-            )
-            llm.async_client = AsyncSarvamAI(
-                api_subscription_key=key,
-                timeout=LLM_HTTP_TIMEOUT,
-            )
+            if llm is None:
+                llm = build_sarvam_llm(key)
+            else:
+                llm.client = SarvamAI(
+                    api_subscription_key=key,
+                    timeout=LLM_HTTP_TIMEOUT,
+                )
+                llm.async_client = AsyncSarvamAI(
+                    api_subscription_key=key,
+                    timeout=LLM_HTTP_TIMEOUT,
+                )
             _llm_key = key
     return key
 
@@ -607,7 +609,7 @@ def apply_sarvam_api_key(api_key: str | None = None) -> str:
 
 def build_graph():
     """Build and compile the agent graph."""
-    model = llm.bind_tools(tools)
+    model = llm.bind_tools(tools) if llm is not None else None
 
     def prepare_seller_diagnosis(state: State, config: RunnableConfig):
         supplied_id = seller_id_from_messages(state["messages"])
@@ -650,12 +652,16 @@ def build_graph():
 
     def chatbot(state: State, config: RunnableConfig):
         if state.get("seller_id_error"):
+            voice_mode = (config.get("configurable") or {}).get("voice_mode") is True
             return {
                 "messages": [
                     AIMessage(
                         content=(
                             "माफ़ कीजिए, यह Seller ID मेरे रिकॉर्ड में नहीं मिली। "
                             "कृपया ID दोबारा धीरे-धीरे बोलें या पूरी ID बताएँ।"
+                            if voice_mode
+                            else "Sorry, I couldn't find that Seller ID in my records. "
+                            "Please repeat it slowly or provide the complete ID."
                         )
                     )
                 ]
@@ -673,6 +679,8 @@ def build_graph():
         )
         configurable = config.get("configurable") or {}
         session_id = str(configurable.get("thread_id", "unknown"))
+        client_id = str(configurable.get("client_id", session_id))
+        voice_mode = configurable.get("voice_mode") is True
         seller_id = state.get("seller_id")
         if seller_id and session_id != "unknown":
             register_session_seller(session_id, seller_id)
@@ -683,7 +691,7 @@ def build_graph():
         session_language = detect_session_language(state["messages"])
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
-            SystemMessage(content=language_policy(session_language)),
+            SystemMessage(content=language_policy(session_language, voice_mode)),
             SystemMessage(content=india_date_context()),
         ]
         if latest_question:
@@ -704,8 +712,19 @@ def build_graph():
         messages.extend(state["messages"])
         log_text_boundary("Sarvam LLM request", session_id, latest_question)
         try:
+            session_key = get_client_sarvam_api_key(client_id)
+            if not session_key:
+                raise SarvamLLMUnavailable(
+                    "No Sarvam API key is configured for this session.",
+                    "missing_api_key",
+                )
+            session_model = (
+                model
+                if session_key == _llm_key and model is not None
+                else build_sarvam_llm(session_key).bind_tools(tools)
+            )
             response = invoke_sarvam_with_retries(
-                lambda: model.invoke(messages),
+                lambda: session_model.invoke(messages),
                 session_id,
             )
         except Exception as error:
@@ -716,7 +735,7 @@ def build_graph():
                 extract_request_id(error),
             )
             raise
-        if not getattr(response, "tool_calls", None):
+        if not getattr(response, "tool_calls", None) and voice_mode:
             response = AIMessage(
                 content=ensure_hindi_response(getattr(response, "content", None))
             )

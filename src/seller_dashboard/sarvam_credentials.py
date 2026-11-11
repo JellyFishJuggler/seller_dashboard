@@ -31,6 +31,7 @@ import json
 import os
 from pathlib import Path
 from threading import RLock
+import time
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -118,9 +119,16 @@ def _write_custom_key_at(path: Path, key: str) -> None:
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["api_key"] = key
     temp_path = path.with_name(f"{path.name}.tmp")
     try:
-        temp_path.write_text(json.dumps({"api_key": key}), encoding="utf-8")
+        temp_path.write_text(json.dumps(payload), encoding="utf-8")
         try:
             os.chmod(temp_path, 0o600)
         except OSError:
@@ -213,6 +221,136 @@ def get_sarvam_api_key(path: Path | None = None) -> str | None:
     if env_key and env_key.strip():
         return env_key.strip()
     return None
+
+
+def get_default_sarvam_api_key() -> str | None:
+    """Return only the deployment-configured key, never a portal override."""
+    env_key = os.getenv("SARVAM_API_KEY")
+    return env_key.strip() if env_key and env_key.strip() else None
+
+
+def _read_client_keys_at(path: Path) -> dict[str, dict[str, object]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    values = payload.get("client_keys", {}) if isinstance(payload, dict) else {}
+    if not isinstance(values, dict):
+        return {}
+    return {
+        session_id: item
+        for session_id, item in values.items()
+        if isinstance(session_id, str)
+        and isinstance(item, dict)
+        and isinstance(item.get("api_key"), str)
+        and item["api_key"].strip()
+    }
+
+
+def _read_client_keys(path: Path | None = None) -> dict[str, dict[str, object]]:
+    candidates = [path] if path is not None else _storage_candidates()
+    merged: dict[str, dict[str, object]] = {}
+    for candidate in candidates:
+        for client_id, item in _read_client_keys_at(candidate).items():
+            saved = merged.get(client_id)
+            saved_at = item.get("updated_at", _modification_time(candidate))
+            if not isinstance(saved_at, (int, float)):
+                saved_at = _modification_time(candidate)
+            previous_at = saved.get("updated_at", float("-inf")) if saved else float("-inf")
+            if not isinstance(previous_at, (int, float)):
+                previous_at = float("-inf")
+            if saved is None or saved_at >= previous_at:
+                merged[client_id] = item
+    return merged
+
+
+def _write_client_keys_at(
+    path: Path,
+    client_keys: dict[str, dict[str, object]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = {}
+    payload = current if isinstance(current, dict) else {}
+    payload["client_keys"] = client_keys
+    temp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        temp_path.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def get_client_sarvam_api_key(client_id: str) -> str | None:
+    """Return this browser profile's override, falling back to deployment env."""
+    normalized_client = (client_id or "").strip()
+    if normalized_client:
+        with _LOCK:
+            saved = _read_client_keys().get(normalized_client)
+        if saved:
+            key = saved.get("api_key")
+            if isinstance(key, str) and key.strip():
+                return key.strip()
+    return get_default_sarvam_api_key()
+
+
+def get_client_sarvam_key_status(client_id: str) -> dict:
+    """Return masked credentials status for one browser profile."""
+    normalized_client = (client_id or "").strip()
+    with _LOCK:
+        saved = _read_client_keys().get(normalized_client) if normalized_client else None
+    if saved and isinstance(saved.get("api_key"), str):
+        return {"configured": True, "source": "custom", "masked": MASKED_KEY}
+    if get_default_sarvam_api_key():
+        return {"configured": True, "source": "env", "masked": MASKED_KEY}
+    return {"configured": False, "source": "none", "masked": ""}
+
+
+def set_client_sarvam_api_key(client_id: str, api_key: str) -> dict:
+    """Save or clear a private API-key override for one browser profile."""
+    normalized_client = (client_id or "").strip()
+    if not normalized_client or len(normalized_client) > 128 or any(
+        character.isspace() for character in normalized_client
+    ):
+        raise ValueError("A valid browser profile ID is required.")
+
+    key = (api_key or "").strip()
+    if key and (any(character.isspace() for character in key) or len(key) > MAX_KEY_LENGTH):
+        raise ValueError("API key must be a single value without spaces and at most 512 characters.")
+
+    with _LOCK:
+        client_keys = _read_client_keys()
+        if key:
+            client_keys[normalized_client] = {
+                "api_key": key,
+                "updated_at": time.time(),
+            }
+        else:
+            client_keys.pop(normalized_client, None)
+
+        primary = credentials_path()
+        try:
+            _write_client_keys_at(primary, client_keys)
+        except OSError:
+            if _uses_explicit_storage(None):
+                raise
+            _write_client_keys_at(FALLBACK_CREDENTIALS_PATH, client_keys)
+
+    return get_client_sarvam_key_status(normalized_client)
 
 
 def get_sarvam_key_status(path: Path | None = None) -> dict:

@@ -21,6 +21,7 @@ tests/*
 !tests/test_call_closure.py
 !tests/test_voice_resilience.py
 !tests/test_summary_storage.py
+!tests/test_sarvam_profile_keys.py
 temp.py
 files/knowledge_base
 private/

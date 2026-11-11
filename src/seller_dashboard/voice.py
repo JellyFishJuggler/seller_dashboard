@@ -10,7 +10,10 @@ from seller_dashboard.bot import (
     graph,
 )
 from seller_dashboard.assistant_style import ensure_hindi_response
-from seller_dashboard.sarvam_credentials import get_sarvam_api_key
+from seller_dashboard.sarvam_credentials import (
+    get_client_sarvam_api_key,
+    get_default_sarvam_api_key,
+)
 from seller_dashboard.voice_diagnostics import (
     EmptyAssistantResponseError,
     EmptyTTSInputError,
@@ -39,37 +42,28 @@ logger = logging.getLogger(__name__)
 class VoiceAssistant:
 
     def __init__(self):
-        api_key = get_sarvam_api_key()
-        if not api_key:
-            raise ValueError("SARVAM_API_KEY not found in .env or backend settings.")
+        api_key = get_default_sarvam_api_key()
         self._api_key = api_key
-        self.stt_client = AsyncSarvamAI(
-            api_subscription_key=api_key
+        self.stt_client = (
+            AsyncSarvamAI(api_subscription_key=api_key) if api_key else None
         )
-
-        self.tts_client = SarvamAI(
-            api_subscription_key=api_key
-        )
+        self.tts_client = SarvamAI(api_subscription_key=api_key) if api_key else None
 
     def refresh_clients(self, api_key: str | None = None) -> None:
         """Recreate STT/TTS clients for the currently selected API key."""
-        key = (api_key or get_sarvam_api_key() or "").strip()
+        key = (api_key or get_default_sarvam_api_key() or "").strip()
         if not key:
             raise ValueError("No Sarvam API key is configured.")
         self.stt_client = AsyncSarvamAI(api_subscription_key=key)
         self.tts_client = SarvamAI(api_subscription_key=key)
         self._api_key = key
 
-    def _ensure_current_key(self) -> None:
-        """Pick up a key saved through the settings API without a restart."""
-        if not hasattr(self, "_api_key"):
-            # Manually constructed test doubles provide their own clients.
-            return
-        current_key = get_sarvam_api_key()
-        if current_key and current_key != self._api_key:
-            self.refresh_clients(current_key)
-
-    def generate_response(self, transcript: str, session_id: str) -> str:
+    def generate_response(
+        self,
+        transcript: str,
+        session_id: str,
+        client_id: str | None = None,
+    ) -> str:
         """Send transcript to LangGraph and return its response."""
         clean_text = clean_transcript(transcript)
         log_text_boundary("LangGraph input / Sarvam LLM", session_id, transcript)
@@ -81,7 +75,9 @@ class VoiceAssistant:
                 {"messages": [HumanMessage(content=clean_text)]},
                 config={
                     "configurable": {
-                        "thread_id": session_id
+                        "thread_id": session_id,
+                        "voice_mode": True,
+                        "client_id": client_id or session_id,
                     }
                 },
             )
@@ -122,16 +118,28 @@ class VoiceAssistant:
         """Return the fixed Hindi retry message."""
         return "माफ़ कीजिए, मैं आपकी बात ठीक से समझ नहीं पाई। कृपया दोबारा बोलें।"
 
-    def generate_audio(self, text: str, session_id: str = "unknown") -> bytes:
+    def generate_audio(
+        self,
+        text: str,
+        session_id: str = "unknown",
+        client_id: str | None = None,
+    ) -> bytes:
         """Speak the unchanged assistant response with the fixed Ritu sales voice."""
-        self._ensure_current_key()
         if not has_nonempty_text(text):
             raise EmptyTTSInputError("Text-to-speech input was empty; no TTS request was made.")
         text = ensure_hindi_response(text)
         log_text_boundary("Sarvam TTS input", session_id, text)
 
         try:
-            audio = self.tts_client.text_to_speech.convert(
+            api_key = get_client_sarvam_api_key(client_id or session_id)
+            if not api_key:
+                raise ValueError("No Sarvam API key is configured for this session.")
+            tts_client = (
+                self.tts_client
+                if not hasattr(self, "_api_key") or api_key == self._api_key
+                else SarvamAI(api_subscription_key=api_key)
+            )
+            audio = tts_client.text_to_speech.convert(
                 text=text.strip(),
                 model="bulbul:v4-flash",
                 language_code="hi-IN",
@@ -157,11 +165,22 @@ class VoiceAssistant:
 
         return audio_bytes
 
-    def connect_stt(self, session_id: str = "unknown"):
+    def connect_stt(
+        self,
+        session_id: str = "unknown",
+        client_id: str | None = None,
+    ):
         """Create a Sarvam realtime STT connection."""
-        self._ensure_current_key()
+        api_key = get_client_sarvam_api_key(client_id or session_id)
+        if not api_key:
+            raise ValueError("No Sarvam API key is configured for this session.")
         log_text_boundary("Sarvam Realtime STT connection", session_id, None)
-        return self.stt_client.speech_to_text_realtime_streaming.connect(
+        stt_client = (
+            self.stt_client
+            if not hasattr(self, "_api_key") or api_key == self._api_key
+            else AsyncSarvamAI(api_subscription_key=api_key)
+        )
+        return stt_client.speech_to_text_realtime_streaming.connect(
             model="saaras:v4",
             language_code="auto",
             mode="transcribe",

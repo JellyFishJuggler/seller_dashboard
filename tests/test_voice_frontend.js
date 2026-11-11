@@ -62,7 +62,11 @@ class FakeWebSocket {
     this.sent.push(payload);
   }
 
-  close() {
+  close(code = 1000) {
+    if (code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new Error('Invalid WebSocket close code');
+    }
+    this.closeCode = code;
     this.readyState = 3;
     this.onclose?.();
   }
@@ -155,6 +159,7 @@ const test = new vm.Script(`${source}
     }) });
 
     assert.equal(firstSocket.readyState, 3);
+    assert.equal(firstSocket.closeCode, 1000);
     assert.equal(voiceActive, false);
     assert.equal(startVoiceButton.disabled, false);
     assert.equal(voiceBar.dataset.state, 'error');

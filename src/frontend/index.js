@@ -189,7 +189,7 @@ async function connectMicrophone() {
     voicePaused = true;
     setVoiceState('error', voiceRecoverableMessage);
     if (voiceSocket?.readyState === WebSocket.OPEN) {
-      voiceSocket.close(1012, 'Microphone disconnected');
+      voiceSocket.close(1000, 'Microphone disconnected');
     }
   }, { once: true });
 
@@ -535,7 +535,7 @@ function handleVoiceMessage(event) {
       voicePaused = true;
       setVoiceState('error', voiceRecoverableMessage);
       if (voiceSocket?.readyState === WebSocket.OPEN) {
-        voiceSocket.close(1012, 'Speech recognition unavailable');
+        voiceSocket.close(1000, 'Speech recognition unavailable');
       }
       return;
     }

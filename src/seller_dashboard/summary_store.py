@@ -10,7 +10,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from seller_dashboard.action_store import get_actions_by_session
-from seller_dashboard.assistant_style import FEMININE_VOICE_PROMPT
+from seller_dashboard.assistant_style import (
+    FEMININE_VOICE_PROMPT,
+    ensure_hindi_response,
+)
 from seller_dashboard.conversation_store import get_conversation_history
 from seller_dashboard.tools import (
     _SESSION_FINDINGS,
@@ -490,9 +493,9 @@ def generate_call_summary(
 
     # 6. Overall summary prose
     overall_summary = (
-        f"Call summary for seller {norm_seller} ({business_overview.get('business_name', 'Snapdeal Seller')}, "
-        f"{business_overview.get('category', 'Category')}). The discussion covered {len(messages)} conversation turns "
-        f"addressing performance changes. The seller has {len(agreed_actions)} recorded action(s). "
+        f"Seller {norm_seller} ({business_overview.get('business_name', 'Snapdeal Seller')}, "
+        f"{business_overview.get('category', 'श्रेणी')}) की बातचीत में प्रदर्शन से जुड़े "
+        f"{len(messages)} संदेशों की समीक्षा की गई। {len(agreed_actions)} सहमत action दर्ज हैं। "
         f"{business_overview.get('observations', '')}"
     )
 
@@ -500,12 +503,13 @@ def generate_call_summary(
     if llm is not None:
         try:
             prompt = (
-                f"You are the Snapdeal Virtual KAM assistant. Write a concise, professional 2-3 sentence overall summary of this call.\n"
+                f"आप Snapdeal की महिला KAM सहायक हैं। इस कॉल का 2-3 वाक्यों में संक्षिप्त, "
+                f"पेशेवर summary केवल स्वाभाविक हिंदी (देवनागरी) में लिखें।\n"
                 f"Seller: {norm_seller} ({business_overview.get('business_name')})\n"
                 f"Metrics: {json.dumps(key_metrics, ensure_ascii=False)}\n"
                 f"Actions: {json.dumps(agreed_actions, ensure_ascii=False)}\n"
                 f"Conversation turns: {len(messages)}\n"
-                f"Rules: Do not invent metrics or margin figures. Do not claim emails were sent.\n"
+                f"नियम: कोई metric या margin न गढ़ें। यह दावा न करें कि email भेजा गया।\n"
                 f"{FEMININE_VOICE_PROMPT}"
             )
             llm_response = llm.invoke(prompt)
@@ -513,7 +517,7 @@ def generate_call_summary(
             if content and isinstance(content, str) and content.strip():
                 # Validate that LLM did not invent fake margin/profit
                 if "profit margin is" not in content.lower():
-                    overall_summary = content.strip()
+                    overall_summary = ensure_hindi_response(content)
         except Exception as exc:
             logger.warning("LLM call summary generation failed; using grounded fallback. Error: %s", exc)
 

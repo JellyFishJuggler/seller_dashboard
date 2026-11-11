@@ -12,6 +12,15 @@ wheels/
 
 # Project files
 tests/
+!tests/
+tests/*
+!tests/test_hindi_seller_id.py
+!tests/test_voice_frontend.js
+!tests/test_voice_style.py
+!tests/test_voice_language_and_actions.py
+!tests/test_call_closure.py
+!tests/test_voice_resilience.py
+!tests/test_summary_storage.py
 temp.py
 files/knowledge_base
 private/

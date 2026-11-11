@@ -2,6 +2,7 @@ from threading import Lock
 from datetime import date, datetime
 import re
 from typing import Literal
+import unicodedata
 from zoneinfo import ZoneInfo
 
 from langchain_core.runnables import RunnableConfig
@@ -26,7 +27,7 @@ _ACTION_COUNTER = 0
 def register_session_seller(thread_id: str, seller_id: str) -> None:
     """Associate a session/thread ID with a validated seller ID."""
     normalized = normalize_seller_id(seller_id)
-    if normalized:
+    if normalized and is_known_seller(normalized):
         with _SESSION_LOCK:
             _SESSION_SELLER[str(thread_id)] = normalized
 
@@ -599,6 +600,45 @@ SELLERS = {
 }
 
 
+_SELLER_ID_DIGIT_WORDS = {
+    "zero": "0", "oh": "0", "shunya": "0", "shoonya": "0", "शून्य": "0",
+    "जीरो": "0", "ज़ीरो": "0",
+    "one": "1", "ek": "1", "एक": "1", "वन": "1",
+    "two": "2", "do": "2", "दो": "2", "टू": "2",
+    "three": "3", "teen": "3", "tin": "3", "तीन": "3", "थ्री": "3",
+    "four": "4", "char": "4", "chaar": "4", "चार": "4", "फोर": "4",
+    "five": "5", "panch": "5", "paanch": "5", "पांच": "5", "पाँच": "5", "फाइव": "5",
+    "six": "6", "chhe": "6", "chhah": "6", "छह": "6", "छः": "6", "सिक्स": "6",
+    "seven": "7", "saat": "7", "sat": "7", "सात": "7", "सेवन": "7",
+    "eight": "8", "aath": "8", "आठ": "8", "एट": "8",
+    "nine": "9", "nau": "9", "नौ": "9", "नाइन": "9",
+}
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def _spoken_seller_id_digits(value: str) -> str | None:
+    """Convert a complete spoken sequence of digits to its numeric form."""
+    candidate = unicodedata.normalize("NFKC", value).translate(_DEVANAGARI_DIGITS).casefold().strip()
+    candidate = re.sub(
+        r"^(?:(?:my|the)\s+)?seller\s*(?:id|identifier)|^unique\s*id",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = re.sub(r"^\s*(?:is|:|=)\s*", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^\s*sd\s*-\s*", "", candidate, flags=re.IGNORECASE)
+    candidate = candidate.strip(" \t\r\n.,!?;:'\"`()[]{}<>|/\\-_।")
+
+    if re.fullmatch(r"\d+(?:[\s,.-]+\d+)*", candidate):
+        return re.sub(r"\D", "", candidate)
+
+    tokens = [token.strip(".,!?;:'\"`()[]{}<>|/\\-_।") for token in candidate.split()]
+    tokens = [token for token in tokens if token]
+    if len(tokens) < 4 or any(token not in _SELLER_ID_DIGIT_WORDS for token in tokens):
+        return None
+    return "".join(_SELLER_ID_DIGIT_WORDS[token] for token in tokens)
+
+
 def normalize_seller_id(value: object) -> str | None:
     """Normalise a seller identifier without ever changing the seller dataset.
 
@@ -611,7 +651,9 @@ def normalize_seller_id(value: object) -> str | None:
     if isinstance(value, float) and value.is_integer():
         value = int(value)
 
-    text = str(value).strip().upper().replace(" ", "")
+    raw_text = str(value).strip()
+    spoken_digits = _spoken_seller_id_digits(raw_text)
+    text = (spoken_digits or raw_text).upper().replace(" ", "")
 
     if not text:
         return None

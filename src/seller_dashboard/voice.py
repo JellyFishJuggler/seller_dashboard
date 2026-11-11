@@ -7,10 +7,9 @@ from sarvamai import AsyncSarvamAI, SarvamAI, RealtimeAudioInput
 
 from seller_dashboard.bot import (
     SarvamLLMUnavailable,
-    classify_text_language,
-    detect_session_language,
     graph,
 )
+from seller_dashboard.assistant_style import ensure_hindi_response
 from seller_dashboard.sarvam_credentials import get_sarvam_api_key
 from seller_dashboard.voice_diagnostics import (
     EmptyAssistantResponseError,
@@ -26,13 +25,11 @@ load_dotenv()
 
 SAMPLE_RATE = 16000
 
-# One fixed TTS persona for every assistant utterance. Language detection is
-# only used to choose the pronunciation language code below; it must never
-# switch the speaker. `ritu_hi_sales` is Sarvam's Ritu (Hindi, sales) persona.
+# One fixed Hindi TTS persona for every assistant utterance.
 TTS_SPEAKER = "ritu_hi_sales"
 TTS_LANGUAGE_CODES = {
     "hindi": "hi-IN",
-    "english": "en-IN",
+    "english": "hi-IN",
     "hinglish": "hi-IN",
 }
 
@@ -94,12 +91,10 @@ class VoiceAssistant:
                 session_id,
                 error.failure_type,
             )
-            language = classify_text_language(clean_text) or "hinglish"
-            fallback = {
-                "hindi": "माफ़ कीजिए, जवाब देने में थोड़ी तकनीकी दिक्कत आ रही है। मैं अभी जवाब नहीं दे पा रही हूँ। कृपया अपना सवाल फिर से बोलें।",
-                "english": "Sorry, I'm having a temporary issue generating a response. Please ask your question again.",
-                "hinglish": "Maaf kijiye, response generate karne mein thodi technical dikkat aa rahi hai. Main abhi jawab nahi de pa rahi hoon. Aap ek baar apna sawaal dobara bol sakte hain?",
-            }[language]
+            fallback = (
+                "माफ़ कीजिए, जवाब तैयार करने में थोड़ी तकनीकी परेशानी हो रही है। "
+                "मैं अभी उत्तर नहीं दे पा रही हूँ। कृपया अपना सवाल दोबारा पूछें।"
+            )
             log_text_boundary("Sarvam LLM fallback response", session_id, fallback)
             return fallback
 
@@ -121,38 +116,25 @@ class VoiceAssistant:
             raise EmptyAssistantResponseError(
                 "The assistant returned no text; text-to-speech was not called."
             )
-        return response_text.strip()
+        return ensure_hindi_response(response_text)
 
     def retry_prompt(self, session_id: str, transcript: str | None = None) -> str:
-        """Choose a concise retry message in the active session language."""
-        language = classify_text_language(transcript or "")
-        if language is None:
-            try:
-                state = graph.get_state({"configurable": {"thread_id": session_id}})
-                language = detect_session_language(state.values.get("messages", []))
-            except Exception:
-                language = "hinglish"
-        return {
-            "hindi": "माफ़ कीजिए, मैं आपकी बात ठीक से समझ नहीं पाई। कृपया दोबारा बोलें।",
-            "english": "Sorry, I didn't catch that. Please say it again.",
-            "hinglish": "माफ़ कीजिए, मैं आपकी बात clear नहीं समझ पाई। कृपया फिर से बोलिए।",
-        }.get(language, "माफ़ कीजिए, मैं समझ नहीं पाई। कृपया फिर से बोलिए।")
+        """Return the fixed Hindi retry message."""
+        return "माफ़ कीजिए, मैं आपकी बात ठीक से समझ नहीं पाई। कृपया दोबारा बोलें।"
 
     def generate_audio(self, text: str, session_id: str = "unknown") -> bytes:
         """Speak the unchanged assistant response with the fixed Ritu sales voice."""
         self._ensure_current_key()
-        log_text_boundary("Sarvam TTS input", session_id, text)
         if not has_nonempty_text(text):
             raise EmptyTTSInputError("Text-to-speech input was empty; no TTS request was made.")
-
-        language = classify_text_language(text) or "hinglish"
-        language_code = TTS_LANGUAGE_CODES.get(language, "hi-IN")
+        text = ensure_hindi_response(text)
+        log_text_boundary("Sarvam TTS input", session_id, text)
 
         try:
             audio = self.tts_client.text_to_speech.convert(
                 text=text.strip(),
                 model="bulbul:v4-flash",
-                language_code=language_code,
+                language_code="hi-IN",
                 speaker=TTS_SPEAKER,
             )
         except Exception as error:

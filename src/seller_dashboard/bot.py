@@ -24,7 +24,10 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
-from seller_dashboard.assistant_style import FEMININE_VOICE_PROMPT
+from seller_dashboard.assistant_style import (
+    FEMININE_VOICE_PROMPT,
+    ensure_hindi_response,
+)
 from seller_dashboard.rag import RAGRetriever, get_retriever
 from seller_dashboard.sarvam_credentials import get_sarvam_api_key
 from seller_dashboard.voice_diagnostics import (
@@ -48,6 +51,8 @@ from seller_dashboard.tools import (
     get_playbook,
     register_session_seller,
     get_session_seller,
+    is_known_seller,
+    normalize_seller_id,
 )
 
 SYSTEM_PROMPT = """
@@ -76,7 +81,7 @@ DIAGNOSTIC REASONING:
 Prioritise one issue at a time by impact, urgency, practical ease and evidence strength. Separate measured facts, hypotheses, missing information and confirmed causes. Correlation is not proof: stockouts, price changes or visibility must not be described as causes unless supported. A rising cancellation rate does not establish who cancelled or why. If cancellations and stockouts both rise, stock mismatch is a hypothesis; ask one unanswered question that can test it.
 
 PROACTIVE CONSULTATION:
-When seller data and a diagnostic brief are supplied, begin with the highest priority measured observation naturally, even if the seller only gave their Seller ID (after introducing yourself as Sarika). Briefly distinguish the observed change from a possible explanation in plain language, then ask exactly one contextual follow-up question that is not answered in the history or by the tools. Do not ask the seller for metrics already supplied. If no material issue is supported, say that briefly and ask what business goal they would like to focus on. Keep the opening concise and in the session language.
+When seller data and a diagnostic brief are supplied, begin with the highest priority measured observation naturally, even if the seller only gave their Seller ID (after introducing yourself as Sarika). Briefly distinguish the observed change from a possible explanation in plain language, then ask exactly one contextual follow-up question that is not answered in the history or by the tools. Do not ask the seller for metrics already supplied. If no material issue is supported, say that briefly and ask what business goal they would like to focus on. Keep the opening concise and in Hindi.
 
 For sales diagnosis, compare sales, orders and ASP together. Rising or stable orders with falling ASP may indicate a price or product-mix change; it does not prove either. Ask about recent price changes, discounts or product mix only if not already answered. If orders fall while ASP is stable, price is unlikely to be the primary explanation. If orders rise while ASP falls, state both facts; do not call orders down or infer that profitability improved or worsened.
 
@@ -84,8 +89,14 @@ Before recommending any specific price change, establish the product's current s
 
 For inventory, prioritize returned products using their historical order counts and the explicit bestseller flag when present. Historical orders are only a relative signal. A bestseller flag is a field in the available mock record, not proof of current popularity; describe it as a record flag and do not infer it from a small number of orders. Never promise demand or sales recovery after restocking, and never prescribe a stock quantity without sufficient data.
 
+SELLER IDENTIFICATION:
+If no valid seller profile is loaded, politely ask for the Seller ID in Hindi. Accept digit-by-digit English or Hindi number words and digit forms. If the ID is invalid or unclear, ask the seller to repeat it in Hindi; never invent or guess an ID. Once a valid profile is loaded, do not ask for its ID again.
+
+CANCELLATION DATA:
+Use get_cancellation_breakdown when asked for cancellation counts, product-level cancellations, or cancellation reasons. Product-level cancellation reasons are assumed mock data, not verified Snapdeal platform facts. State this clearly in Hindi before discussing those reasons. Never present assumed reasons as verified facts.
+
 LANGUAGE AND SPEECH:
-Follow the supplied session-language policy. Keep language and script consistent with the seller's preference: Hindi in Devanagari, English in English, and conversational Hinglish with Hindi in Devanagari and technical terms in English. Use short, human-sounding, TTS-friendly sentences. Do not output Markdown, bullets or tables.
+Always respond in natural, professional Hindi using Devanagari, regardless of the seller's language. Keep common business terms such as cancellation rate, inventory, stock, orders, Seller ID, and product names in English when natural, but construct sentences in Hindi. Use feminine first-person grammar. This applies to every answer, greeting, question, recommendation, confirmation, error, and fallback. Never switch to English or Hinglish. Use short, human-sounding, TTS-friendly sentences. Do not output Markdown, bullets or tables.
 
 RECOMMENDATIONS AND ACTIONS:
 When evidence is sufficient, use get_playbook and give no more than 2-3 practical, relevant actions. Present general guidance as helpful suggestions, not rigid promises. Ask one concise question about the next step naturally; do not overwhelm the seller. Record only evidence-backed findings with record_findings.
@@ -189,16 +200,9 @@ def detect_session_language(messages: list) -> str:
     return current or "hinglish"
 
 
-def language_policy(language: str) -> str:
-    policies = {
-        "hindi": "Respond in natural, professional Hindi using Devanagari. Keep only common business terms in English where appropriate.",
-        "english": "Respond in natural, professional English. Do not insert Hindi or Hinglish phrases.",
-        "hinglish": "Respond in conversational Hinglish, with Hindi in Devanagari and technical/business terms in English. Do not randomly switch scripts.",
-    }
-    return (
-        f"SESSION LANGUAGE POLICY ({language}): {policies.get(language, policies['hinglish'])} "
-        "Maintain this preference for the session. Switch only when the seller switches consistently or asks explicitly."
-    )
+def language_policy(_language: str = "hindi") -> str:
+    """Return the fixed output-language policy, independent of seller input."""
+    return FEMININE_VOICE_PROMPT
 
 
 def india_date_context() -> str:
@@ -415,27 +419,59 @@ class State(TypedDict):
     seller_metrics: dict
     seller_stockouts: dict
     diagnostic_context: str
+    seller_id_error: bool
 
 
-_SELLER_ID_PATTERN = re.compile(
-    r"(?:seller\s*(?:id|identifier)|unique\s*id)\s*(?:is|:|=)?\s*(?:SD\s*-?\s*)?(\d{4,})",
+_SELLER_ID_LABEL_PATTERN = re.compile(
+    r"(?:seller\s*(?:id|identifier)|unique\s*id)\s*(?:is|:|=)?\s*",
     re.IGNORECASE,
 )
 
 
 def seller_id_from_messages(messages: list) -> str | None:
-    """Find an explicitly supplied seller ID in the latest seller turn."""
-    from seller_dashboard.tools import normalize_seller_id
-
+    """Find a numeric or spoken-digit seller ID in the latest seller turn."""
     for message in reversed(messages):
         if not isinstance(message, HumanMessage) or not isinstance(message.content, str):
             continue
         text = message.content.strip()
-        match = _SELLER_ID_PATTERN.search(text)
-        if not match:
-            # Voice users commonly answer the ID request with just the ID.
-            match = re.fullmatch(r"(?:SD\s*-?\s*)?(\d{4,})", text, re.IGNORECASE)
-        return normalize_seller_id(match.group(1)) if match else None
+        wrapped_seller_message = re.search(
+            r"The seller's message is:\s*(.*)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if wrapped_seller_message:
+            text = wrapped_seller_message.group(1).strip()
+
+        labeled_id = _SELLER_ID_LABEL_PATTERN.search(text)
+        candidate = text[labeled_id.end():].strip() if labeled_id else text
+        if labeled_id:
+            explicit_digits = re.match(
+                r"^\s*(?:sd\s*-\s*)?\d+",
+                candidate,
+                flags=re.IGNORECASE,
+            )
+            if explicit_digits:
+                candidate = explicit_digits.group()
+                normalized = normalize_seller_id(candidate)
+            else:
+                normalized = None
+                spoken_tokens = candidate.split()
+                for index in range(1, len(spoken_tokens) + 1):
+                    possible_id = normalize_seller_id(
+                        " ".join(spoken_tokens[:index])
+                    )
+                    if possible_id and re.fullmatch(r"SD-\d+", possible_id):
+                        normalized = possible_id
+        else:
+            normalized = normalize_seller_id(candidate)
+        if not normalized:
+            return None
+
+        # A bare utterance is an ID only if it resolves to digits. A labeled
+        # value is also returned when unknown so the graph can ask for a retry.
+        if labeled_id or re.fullmatch(r"SD-\d+", normalized):
+            return normalized
+        return None
     return None
 
 
@@ -575,6 +611,8 @@ def build_graph():
 
     def prepare_seller_diagnosis(state: State, config: RunnableConfig):
         supplied_id = seller_id_from_messages(state["messages"])
+        if supplied_id and not is_known_seller(supplied_id):
+            return {"seller_id_error": True}
         seller_id = supplied_id or state.get("seller_id")
         if not seller_id:
             # Voice sessions register the portal's loaded seller ID when the
@@ -582,7 +620,7 @@ def build_graph():
             thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
             seller_id = get_session_seller(thread_id)
         if not seller_id or (seller_id == state.get("seller_id") and state.get("seller_metrics")):
-            return {}
+            return {"seller_id_error": False}
 
         # Reuse the existing Python tools and their contracts. The node runs
         # once when a seller is first identified (or the session changes ID).
@@ -607,9 +645,21 @@ def build_graph():
             "seller_metrics": metrics,
             "seller_stockouts": stockouts or {},
             "diagnostic_context": build_diagnostic_context(metrics, stockouts),
+            "seller_id_error": False,
         }
 
     def chatbot(state: State, config: RunnableConfig):
+        if state.get("seller_id_error"):
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "माफ़ कीजिए, यह Seller ID मेरे रिकॉर्ड में नहीं मिली। "
+                            "कृपया ID दोबारा धीरे-धीरे बोलें या पूरी ID बताएँ।"
+                        )
+                    )
+                ]
+            }
         # The system prompt is added for each model call but not written into the
         # checkpointed conversation history, so it is not duplicated every turn.
         latest_question = next(
@@ -666,6 +716,10 @@ def build_graph():
                 extract_request_id(error),
             )
             raise
+        if not getattr(response, "tool_calls", None):
+            response = AIMessage(
+                content=ensure_hindi_response(getattr(response, "content", None))
+            )
         log_text_boundary(
             "Sarvam LLM response",
             session_id,

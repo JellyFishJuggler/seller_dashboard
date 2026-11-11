@@ -434,26 +434,26 @@ def _stt_failure_payload(code: str, detail: str = "") -> tuple[str, str]:
     if any(marker in text for marker in _STT_QUOTA_MARKERS):
         if get_sarvam_key_status().get("source") == "custom":
             message = (
-                "Sarvam speech recognition quota exceeded for the saved custom key. "
-                "Please check its API plan or credits, or clear the custom key in "
-                "Settings to use the .env key."
+                "सहेजी गई custom API key की speech recognition सीमा पूरी हो गई है। "
+                "उसका API plan या credits जाँचें, या Settings में custom key हटाकर "
+                ".env वाली key इस्तेमाल करें।"
             )
         else:
             message = (
-                "Sarvam speech recognition quota exceeded. Please check your API "
-                "plan or configure another API key in Settings."
+                "Sarvam speech recognition की सीमा पूरी हो गई है। अपना API plan "
+                "जाँचें या Settings में दूसरी API key दर्ज करें।"
             )
         return "stt_quota_exceeded", message
 
     if any(marker in text for marker in _STT_AUTH_MARKERS):
         return "stt_auth_failed", (
-            "Sarvam rejected the speech recognition API key. Update the key in "
-            "Settings and try again."
+            "Sarvam ने speech recognition API key स्वीकार नहीं की। Settings में "
+            "key अपडेट करके फिर कोशिश करें।"
         )
 
     return "stt_connection_closed", (
-        "Speech recognition disconnected. Your conversation is saved; start "
-        "voice again to continue."
+        "Speech recognition का connection टूट गया। आपकी बातचीत सुरक्षित है; "
+        "जारी रखने के लिए voice फिर शुरू करें।"
     )
 
 
@@ -531,7 +531,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
             try:
                 await websocket.send_json({
                     "type": "finalization_in_progress",
-                    "message": "Your call is already being finalized. Please wait.",
+                    "message": "आपकी call पूरी की जा रही है। कृपया थोड़ी देर प्रतीक्षा करें।",
                 })
             except (RuntimeError, WebSocketDisconnect):
                 pass
@@ -554,7 +554,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                 await websocket.send_json({
                     "type": "error",
                     "code": result.get("error", "finalization_failed"),
-                    "message": result.get("message", "The call could not be finalized. Saved records are preserved."),
+                    "message": result.get("message", "Call पूरी नहीं हो सकी, लेकिन सहेजे गए रिकॉर्ड सुरक्षित हैं।"),
                 })
                 return
 
@@ -568,7 +568,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                 await websocket.send_json({
                     "type": "error",
                     "code": "final_tts_failed",
-                    "message": "The conversation and summary are saved, but the closing audio could not be generated. You can retry ending the call.",
+                    "message": "बातचीत और summary सुरक्षित हैं, लेकिन closing audio तैयार नहीं हो सकी। आप call समाप्त करने की फिर कोशिश कर सकते हैं।",
                 })
                 return
 
@@ -597,7 +597,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                     await websocket.send_json({
                         "type": "error",
                         "code": "final_playback_timeout",
-                        "message": "The closing audio did not finish playing in time. Your saved records are safe. Please retry ending the call.",
+                        "message": "Closing audio समय पर पूरी नहीं चली। आपके रिकॉर्ड सुरक्षित हैं। कृपया call समाप्त करने की फिर कोशिश करें।",
                     })
                 except (RuntimeError, WebSocketDisconnect):
                     pass
@@ -610,7 +610,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                     await websocket.send_json({
                         "type": "error",
                         "code": "final_playback_failed",
-                        "message": "The closing audio could not be played. Your saved records are safe. Please retry ending the call.",
+                        "message": "Closing audio नहीं चल सकी। आपके रिकॉर्ड सुरक्षित हैं। कृपया call समाप्त करने की फिर कोशिश करें।",
                     })
                 except (RuntimeError, WebSocketDisconnect):
                     pass
@@ -626,7 +626,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                 await websocket.send_json({
                     "type": "error",
                     "code": completed.get("error", "finalization_verification_failed"),
-                    "message": "The closing audio played, but final save verification failed. The call is not marked completed.",
+                    "message": "Closing audio चल गई, लेकिन रिकॉर्ड सुरक्षित होने की पुष्टि नहीं हो सकी। Call को अभी पूरा नहीं माना गया है।",
                 })
                 return
             summary_data = completed.get("summary") or {}
@@ -634,7 +634,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                 "type": "call_ended",
                 "status": "completed",
                 "summary_id": summary_data.get("summary_id", ""),
-                "message": "Call summary and conversation records were verified and saved.",
+                "message": "Call summary और बातचीत के रिकॉर्ड सुरक्षित दर्ज हो गए हैं।",
             })
             await websocket.close(code=1000, reason="Call completed")
 
@@ -725,7 +725,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                             "type": "error",
                             "code": "voice_turn_failed",
                             "recoverable": True,
-                            "message": "I couldn't complete that response. Please try speaking again.",
+                            "message": "माफ़ कीजिए, मैं अभी जवाब नहीं दे पा रही हूँ। कृपया फिर से बोलें।",
                         })
                     except (RuntimeError, WebSocketDisconnect):
                         pass
@@ -775,7 +775,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                             if finalization_lock.locked():
                                 await websocket.send_json({
                                     "type": "finalization_in_progress",
-                                    "message": "Your call is already being finalized. Please wait.",
+                                    "message": "आपकी call पूरी की जा रही है। कृपया थोड़ी देर प्रतीक्षा करें।",
                                 })
                             else:
                                 asyncio.create_task(finalize_voice_call())
@@ -921,7 +921,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                             await websocket.send_json({
                                 "type": "error",
                                 "code": "transcript_storage_failed",
-                                "message": "Your speech was understood, but could not be saved. Please retry the call closure later.",
+                                "message": "आपकी बात समझ आई, लेकिन दर्ज नहीं हो सकी। कृपया call समाप्त करने की फिर कोशिश करें।",
                             })
                             continue
 
@@ -961,7 +961,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                                         await websocket.send_json({
                                             "type": "error",
                                             "code": "pending_question_audio_failed",
-                                            "message": "I could not play the follow-up question. Please try again or use End call to finish.",
+                                            "message": "मैं follow-up सवाल नहीं चला पाई। कृपया फिर कोशिश करें या End call दबाएँ।",
                                         })
                                     finally:
                                         await websocket.send_json({"type": "assistant_end"})
@@ -969,7 +969,7 @@ async def voice_input(websocket: WebSocket, session_id: str, seller_id: str = ""
                                 await websocket.send_json({
                                     "type": "error",
                                     "code": "transcript_storage_failed",
-                                    "message": "I could not save the follow-up prompt, so the call remains open. Please try again.",
+                                    "message": "मैं follow-up सवाल दर्ज नहीं कर पाई, इसलिए call जारी है। कृपया फिर कोशिश करें।",
                                 })
                                 await websocket.send_json({"type": "assistant_end"})
                                 continue

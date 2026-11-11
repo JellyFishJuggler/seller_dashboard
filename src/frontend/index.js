@@ -80,21 +80,30 @@ function scrollToLatest() {
 }
 
 function setVoiceState(state, message) {
+  if (state === 'error') {
+    message = hindiVoiceMessage(message, 'माफ़ कीजिए, सेवा में समस्या आई है। कृपया फिर कोशिश करें।');
+  }
   voiceBar.dataset.state = state;
   voiceStatus.textContent = message;
   connectionStatus.dataset.state = state;
   transcriptLive.dataset.state = state;
   const labels = {
-    idle: ['Voice ready', 'Ready'],
-    connecting: ['Connecting…', 'Connecting'],
-    listening: ['Voice connected', 'Listening'],
-    processing: ['Voice connected', 'Thinking'],
-    speaking: ['Voice connected', 'Speaking'],
-    error: ['Connection issue', 'Issue'],
+    idle: ['आवाज़ के लिए तैयार', 'तैयार'],
+    connecting: ['जुड़ रहा है…', 'जुड़ रहा है'],
+    listening: ['आवाज़ जुड़ी', 'सुन रही हूँ'],
+    processing: ['आवाज़ जुड़ी', 'जाँच जारी'],
+    speaking: ['आवाज़ जुड़ी', 'बोल रही हूँ'],
+    error: ['कनेक्शन समस्या', 'समस्या'],
   };
   const [connectionText, transcriptText] = labels[state] || labels.idle;
   connectionLabel.textContent = connectionText;
   transcriptLive.lastChild.textContent = ` ${transcriptText}`;
+}
+
+function hindiVoiceMessage(message, fallback) {
+  return typeof message === 'string' && /[\u0900-\u097f]/.test(message)
+    ? message
+    : fallback;
 }
 
 function addMessage(text, who, extraClass = '') {
@@ -280,11 +289,11 @@ async function connectMicrophone() {
 async function startVoice() {
   if (voiceActive || voiceStarting) return;
   if (!window.isSecureContext) {
-    setVoiceState('error', 'Microphone access requires HTTPS or localhost. Open the portal using a secure connection.');
+    setVoiceState('error', 'माइक्रोफ़ोन चलाने के लिए HTTPS या localhost ज़रूरी है। पोर्टल को सुरक्षित connection से खोलें।');
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia || !('WebSocket' in window)) {
-    setVoiceState('error', 'This browser does not support microphone voice chat.');
+    setVoiceState('error', 'यह browser microphone voice chat को support नहीं करता।');
     return;
   }
 
@@ -293,14 +302,14 @@ async function startVoice() {
   voiceRecoverableMessage = '';
   voiceStarting = true;
   startVoiceButton.disabled = true;
-  setVoiceState('connecting', 'Requesting microphone access…');
+  setVoiceState('connecting', 'माइक्रोफ़ोन की अनुमति माँगी जा रही है…');
   try {
     await connectMicrophone();
     if (attempt !== voiceStartToken) {
       cleanupVoiceResources();
       return;
     }
-    setVoiceState('connecting', 'Connecting to voice service…');
+    setVoiceState('connecting', 'Voice service से जुड़ रहा है…');
     // Bind the loaded seller to the voice session so the assistant answers
     // from this seller's data right away instead of asking for a seller ID.
     const sellerParam = sellerId ? `?seller_id=${encodeURIComponent(sellerId)}` : '';
@@ -310,15 +319,15 @@ async function startVoice() {
     socket.binaryType = 'arraybuffer';
     socket.onmessage = (event) => handleVoiceMessage(event);
     socket.onerror = () => {
-      if (voiceActive || voiceStarting) setVoiceState('error', 'Voice connection failed. Check that the API is running.');
+      if (voiceActive || voiceStarting) setVoiceState('error', 'Voice connection नहीं हो पाया। कृपया API connection जाँचें।');
     };
     socket.onclose = () => {
       const wasActive = voiceActive;
       cleanupVoiceResources();
-      if (voiceCallCompleted) setVoiceState('idle', 'Call completed and saved');
+      if (voiceCallCompleted) setVoiceState('idle', 'Call पूरी हुई और सुरक्षित दर्ज है');
       else if (voiceRecoverableError) setVoiceState('error', voiceRecoverableMessage);
-      else if (wasActive) setVoiceState('error', 'Voice connection closed. Start a new call to reconnect.');
-      else if (!voiceClosingByUser) setVoiceState('error', 'Voice connection closed.');
+      else if (wasActive) setVoiceState('error', 'Voice connection टूट गया। दोबारा जुड़ने के लिए voice फिर शुरू करें।');
+      else if (!voiceClosingByUser) setVoiceState('error', 'Voice connection बंद हो गया।');
       voiceClosingByUser = false;
       voiceSocket = null;
     };
@@ -339,8 +348,8 @@ async function startVoice() {
     startVoiceButton.disabled = true;
     endVoiceButton.disabled = false;
     liveTranscript.hidden = false;
-    liveTranscript.textContent = 'Microphone ready. Connecting speech recognition…';
-    setVoiceState('connecting', 'Microphone ready. Connecting speech recognition…');
+    liveTranscript.textContent = 'माइक्रोफ़ोन तैयार है। Speech recognition से जुड़ रहा है…';
+    setVoiceState('connecting', 'माइक्रोफ़ोन तैयार है। Speech recognition से जुड़ रहा है…');
   } catch (error) {
     cleanupVoiceResources();
     if (voiceSocket && voiceSocket.readyState < WebSocket.CLOSING) voiceSocket.close();
@@ -349,7 +358,10 @@ async function startVoice() {
       startVoiceButton.disabled = false;
       endVoiceButton.disabled = true;
       const denied = error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError';
-      setVoiceState('error', denied ? 'Microphone permission was denied.' : (error.message || 'Could not start voice chat.'));
+      const message = denied
+        ? 'माइक्रोफ़ोन की अनुमति नहीं मिली। कृपया अनुमति देकर फिर कोशिश करें।'
+        : hindiVoiceMessage(error.message, 'माइक्रोफ़ोन शुरू नहीं हो सका। कृपया device जाँचकर फिर कोशिश करें।');
+      setVoiceState('error', message);
     }
   } finally {
     if (attempt === voiceStartToken) voiceStarting = false;
@@ -417,7 +429,7 @@ function endVoice() {
     voiceCallFinalizing = true;
     voicePaused = true;
     endVoiceButton.disabled = true;
-    setVoiceState('processing', 'Saving your call…');
+    setVoiceState('processing', 'आपकी call सुरक्षित की जा रही है…');
     voiceSocket.send(JSON.stringify({ type: 'end_call' }));
     return;
   }
@@ -429,7 +441,7 @@ function endVoice() {
   voiceSocket = null;
   cleanupVoiceResources();
   liveTranscript.hidden = true;
-  setVoiceState('idle', 'Voice call ended');
+  setVoiceState('idle', 'Voice call समाप्त हुई');
 }
 
 function handleVoiceMessage(event) {
@@ -447,20 +459,20 @@ function handleVoiceMessage(event) {
   try {
     data = JSON.parse(event.data);
   } catch {
-    setVoiceState('error', 'Received an unreadable message from the voice service.');
+    setVoiceState('error', 'Voice service से पढ़ने योग्य संदेश नहीं मिला।');
     return;
   }
 
   if (data.type === 'stt_ready') {
     voicePaused = false;
     liveTranscript.hidden = false;
-    liveTranscript.textContent = 'Speech recognition connected. Start speaking.';
-    setVoiceState('listening', 'Listening…');
+    liveTranscript.textContent = 'Speech recognition जुड़ गया है। अब बोलना शुरू करें।';
+    setVoiceState('listening', 'मैं सुन रही हूँ…');
   } else if (data.type === 'partial_transcript') {
     logVoiceBoundary('FastAPI WebSocket -> Browser partial transcript', data.text, data.request_id);
     liveTranscript.hidden = false;
-    liveTranscript.textContent = data.text || 'Listening…';
-    setVoiceState('listening', 'Listening…');
+    liveTranscript.textContent = data.text || 'मैं सुन रही हूँ…';
+    setVoiceState('listening', 'मैं सुन रही हूँ…');
   } else if (data.type === 'assistant_start') {
     logVoiceBoundary('FastAPI WebSocket -> Browser final transcript', data.transcript, data.request_id);
     voicePaused = true;
@@ -470,26 +482,26 @@ function handleVoiceMessage(event) {
     voiceReplyErrored = false;
     liveTranscript.hidden = true;
     if (data.transcript) addMessage(data.transcript, 'user');
-    setVoiceState('processing', 'Assistant is thinking…');
+    setVoiceState('processing', 'मैं आपके सवाल की जाँच कर रही हूँ…');
   } else if (data.type === 'call_finalizing') {
     voiceCallFinalizing = true;
     voicePaused = true;
     clearTimeout(voiceEndTimer);
-    setVoiceState('processing', 'Preparing your call summary…');
+    setVoiceState('processing', 'आपकी call summary तैयार कर रही हूँ…');
   } else if (data.type === 'finalization_in_progress') {
     voiceCallFinalizing = true;
     voicePaused = true;
-    setVoiceState('processing', data.message || 'Your call is already being finalized…');
+    setVoiceState('processing', hindiVoiceMessage(data.message, 'आपकी call पूरी की जा रही है…'));
   } else if (data.type === 'assistant_reply') {
     logVoiceBoundary('FastAPI WebSocket -> Browser assistant text', data.text, data.request_id);
     voicePlaybackIsFinalization = voiceCallFinalizing;
     if (data.text) addMessage(data.text, 'assistant');
-    setVoiceState('speaking', 'Assistant is speaking…');
+    setVoiceState('speaking', 'मैं जवाब दे रही हूँ…');
   } else if (data.type === 'assistant_end') {
     voiceAssistantEnded = true;
     if (voiceCallFinalizing) {
       voicePaused = true;
-      setVoiceState('speaking', 'Playing your closing message…');
+      setVoiceState('speaking', 'मैं विदाई संदेश सुना रही हूँ…');
     } else if (voiceReplyErrored) {
       finishVoiceTurn();
     } else if (voiceAudioReceived || voicePlaybackActive || voicePlaybackPending) {
@@ -505,17 +517,20 @@ function handleVoiceMessage(event) {
     voiceCallFinalizing = false;
     voicePaused = true;
     endVoiceButton.disabled = true;
-    setVoiceState('idle', voiceCallCompleted ? 'Call completed and saved' : 'Call ended');
+    setVoiceState('idle', voiceCallCompleted ? 'Call पूरी हुई और सुरक्षित दर्ज है' : 'Call समाप्त हुई');
   } else if (data.type === 'error') {
     logVoiceBoundary(`FastAPI WebSocket error: ${data.code || 'voice_error'}`, data.message, data.request_id);
     if (data.recoverable && ['stt_connection_closed', 'stt_quota_exceeded', 'stt_auth_failed'].includes(data.code)) {
       if (voiceCallFinalizing) {
         voicePaused = true;
-        setVoiceState('processing', data.message || 'Speech recognition disconnected while saving the call.');
+        setVoiceState('processing', hindiVoiceMessage(data.message, 'Call सुरक्षित करते समय Speech recognition का connection टूट गया।'));
         return;
       }
       voiceRecoverableError = true;
-      voiceRecoverableMessage = data.message || 'Speech recognition disconnected. Tap Start voice to retry.';
+      voiceRecoverableMessage = hindiVoiceMessage(
+        data.message,
+        'Speech recognition का connection टूट गया। जारी रखने के लिए voice फिर शुरू करें।',
+      );
       voicePaused = true;
       setVoiceState('error', voiceRecoverableMessage);
       if (voiceSocket?.readyState === WebSocket.OPEN) {
@@ -527,7 +542,7 @@ function handleVoiceMessage(event) {
       // Speech that could not be transcribed is a gentle nudge in the voice
       // status line, not a red error bubble in the conversation.
       voicePaused = false;
-      setVoiceState('listening', data.message || 'I did not catch that. Please say it again.');
+      setVoiceState('listening', hindiVoiceMessage(data.message, 'मैं आपकी बात समझ नहीं पाई। कृपया फिर से बोलें।'));
       return;
     }
     voicePaused = false;
@@ -541,8 +556,9 @@ function handleVoiceMessage(event) {
       voiceReplyErrored = false;
       endVoiceButton.disabled = false;
     }
-    addMessage(`Voice assistant error: ${data.message || 'Unknown backend error.'}`, 'assistant', 'error-message');
-    setVoiceState('error', data.message || 'The voice service returned an error.');
+    const message = hindiVoiceMessage(data.message, 'माफ़ कीजिए, voice service में समस्या आई है। कृपया फिर कोशिश करें।');
+    addMessage(message, 'assistant', 'error-message');
+    setVoiceState('error', message);
   }
 }
 
@@ -550,7 +566,7 @@ async function playVoiceAudio(audioData) {
   if (!voiceAudioContext) return;
   voicePlaybackActive = true;
   voicePlaybackPending = false;
-  setVoiceState('speaking', 'Assistant is speaking…');
+  setVoiceState('speaking', 'मैं जवाब दे रही हूँ…');
   try {
     await voiceAudioContext.resume();
     let audioBuffer;
@@ -576,9 +592,9 @@ async function playVoiceAudio(audioData) {
       }
       if (voiceCallFinalizing) {
         voicePaused = true;
-        setVoiceState('processing', 'Confirming call completion…');
+        setVoiceState('processing', 'Call पूरी होने की पुष्टि कर रही हूँ…');
       } else if (voiceAssistantEnded) finishVoiceTurn();
-      else setVoiceState('processing', 'Finishing response…');
+      else setVoiceState('processing', 'जवाब पूरा कर रही हूँ…');
     };
     source.start();
   } catch (error) {
@@ -589,10 +605,10 @@ async function playVoiceAudio(audioData) {
         type: voicePlaybackIsFinalization ? 'playback_failed' : 'turn_playback_failed',
       }));
     }
-    addMessage(`Could not play the assistant audio: ${error.message || 'unsupported audio format.'}`, 'assistant', 'error-message');
+    addMessage('माफ़ कीजिए, मैं जवाब की आवाज़ नहीं चला पाई। कृपया फिर कोशिश करें।', 'assistant', 'error-message');
     setVoiceState('error', voiceCallFinalizing
-      ? 'Closing audio failed; waiting for retry.'
-      : 'Audio playback failed.');
+      ? 'विदाई संदेश नहीं चल सका। दोबारा कोशिश की जा सकती है।'
+      : 'जवाब की आवाज़ नहीं चल सकी।');
     if (!voiceCallFinalizing && voiceAssistantEnded) finishVoiceTurn();
   }
 }
@@ -600,7 +616,7 @@ async function playVoiceAudio(audioData) {
 function resumeVoiceAfterReply() {
   clearTimeout(voiceEndTimer);
   if (voicePlaybackActive || voicePlaybackPending) {
-    setVoiceState('speaking', 'Assistant is speaking…');
+    setVoiceState('speaking', 'मैं जवाब दे रही हूँ…');
     return;
   }
   if (voiceAssistantEnded) finishVoiceTurn();
@@ -614,7 +630,7 @@ function finishVoiceTurn() {
     return;
   }
   voicePaused = false;
-  if (voiceActive) setVoiceState('listening', 'Listening…');
+  if (voiceActive) setVoiceState('listening', 'मैं सुन रही हूँ…');
 }
 
 function formatPercent(value) {
@@ -633,7 +649,7 @@ function showMetricChange(element, value) {
 async function loadSellerMetrics() {
   const requestedSellerId = sellerIdInput.value.trim();
   if (!requestedSellerId) {
-    setVoiceState('error', 'Enter a seller ID to load your account metrics.');
+    setVoiceState('error', 'अपने account की जानकारी देखने के लिए Seller ID दर्ज करें।');
     sellerIdInput.focus();
     return;
   }
@@ -662,10 +678,10 @@ async function loadSellerMetrics() {
     document.querySelector('#sales-value').textContent = '—';
     document.querySelector('#orders-value').textContent = '—';
     document.querySelector('#price-value').textContent = '—';
-    document.querySelector('#sales-change').textContent = error.message || 'Could not load seller metrics';
-    document.querySelector('#orders-change').textContent = 'Check the seller ID and try again';
-    document.querySelector('#price-change').textContent = 'Dashboard connection unavailable';
-    setVoiceState('error', error.message || 'Could not load seller metrics.');
+    document.querySelector('#sales-change').textContent = 'Seller की जानकारी उपलब्ध नहीं है';
+    document.querySelector('#orders-change').textContent = 'Seller ID जाँचकर फिर कोशिश करें';
+    document.querySelector('#price-change').textContent = 'Dashboard connection उपलब्ध नहीं है';
+    setVoiceState('error', hindiVoiceMessage(error.message, 'Seller की जानकारी नहीं मिल सकी।'));
   } finally {
     loadSellerButton.disabled = false;
     loadSellerButton.textContent = 'Load';
@@ -686,7 +702,7 @@ function startNewSession() {
   sessionId = createSessionId();
   clearTranscript();
   liveTranscript.hidden = true;
-  setVoiceState('idle', 'Tap to start speaking');
+  setVoiceState('idle', 'बोलना शुरू करने के लिए microphone दबाएँ');
 }
 
 function setSarvamKeyStatus(message, state = '') {
@@ -760,7 +776,7 @@ async function saveSarvamKey(event) {
     }
     if (!voiceActive && !voiceStarting && voiceBar.dataset.state === 'error') {
       liveTranscript.hidden = true;
-      setVoiceState('idle', 'API key updated. Tap to start speaking.');
+      setVoiceState('idle', 'API key अपडेट हो गई है। बोलने के लिए microphone दबाएँ।');
     }
   } catch (error) {
     setSarvamKeyStatus(error.message || 'Could not save the API key.', 'error');
@@ -794,7 +810,7 @@ async function clearSarvamKey() {
     }
     if (!voiceActive && !voiceStarting && voiceBar.dataset.state === 'error') {
       liveTranscript.hidden = true;
-      setVoiceState('idle', 'API key updated. Tap to start speaking.');
+      setVoiceState('idle', 'API key अपडेट हो गई है। बोलने के लिए microphone दबाएँ।');
     }
   } catch (error) {
     setSarvamKeyStatus(error.message || 'Could not clear the custom key.', 'error');

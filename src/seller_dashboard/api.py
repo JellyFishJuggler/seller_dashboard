@@ -5,7 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from websockets.exceptions import ConnectionClosed
 from seller_dashboard.bot import graph
 from seller_dashboard.sarvam_credentials import (
+    advance_client_sarvam_api_key,
+    get_client_sarvam_api_key,
     get_client_sarvam_key_status,
+    is_sarvam_credential_error,
     set_client_sarvam_api_key,
 )
 from pydantic import BaseModel
@@ -15,6 +18,7 @@ import base64
 import logging
 import json
 import time
+from types import SimpleNamespace
 from langchain_core.messages import HumanMessage, AIMessage
 from asyncio import wait as wait_for_voice_task_completion
 
@@ -369,11 +373,20 @@ _STT_AUTH_MARKERS = (
     "unauthorized",
     "invalid_api_key",
     "invalid api key",
+    "invalid subscription key",
+    "1003",
     "authentication",
     "forbidden",
     "401",
     "403",
 )
+
+# If Sarvam emits partials but never a final transcript (VAD stuck on room
+# noise or an empty final), finalize the last stable partial after this grace
+# period. A hard cap prevents an utterance from listening forever.
+VOICE_PARTIAL_FINAL_GRACE_SECONDS = 4.0
+VOICE_PARTIAL_MAX_UTTERANCE_SECONDS = 12.0
+VOICE_FINAL_WATCH_INTERVAL_SECONDS = 0.5
 
 
 def _stt_failure_payload(
@@ -449,6 +462,21 @@ async def voice_input(
     turn_tasks: set[asyncio.Task] = set()
     processed_request_ids: set[str] = set()
     partial_request_ids: set[str] = set()
+    processed_utterances: set[int] = set()
+    pending_partial = {
+        "utterance_idx": None,
+        "request_id": None,
+        "text": "",
+        "changed_at": 0.0,
+        "started_at": 0.0,
+        "speech_ended_at": 0.0,
+    }
+    fallback_transcripts: dict[str, float] = {}
+    fallback_request_ids: dict[str, float] = {}
+    fallback_utterance_ids: dict[int, float] = {}
+    fallback_unkeyed_final_pending = False
+    stt_event_queue: asyncio.Queue = asyncio.Queue()
+    stt_stream_end = object()
     last_unkeyed_partial_at = 0.0
     silence_frame = base64.b64encode(b"\x00" * 3200).decode("ascii")
     stt_failure = {"code": "", "detail": ""}
@@ -463,16 +491,27 @@ async def voice_input(
         )
 
     async def send_recoverable_stt_error() -> None:
+        failed_key = get_client_sarvam_api_key(client_id or session_id)
+        failure = RuntimeError(
+            f"{stt_failure['code']} {stt_failure['detail']}"
+        )
+        fallback_key = (
+            advance_client_sarvam_api_key(client_id or session_id, failed_key)
+            if failed_key and is_sarvam_credential_error(failure)
+            else None
+        )
         code, message = _stt_failure_payload(
             stt_failure["code"],
             stt_failure["detail"],
-            client_id,
+            client_id or session_id,
         )
         logger.warning(
             "Sarvam STT unavailable session_id=%s code=%s",
             session_id,
             code,
         )
+        if fallback_key:
+            message += " दूसरी configured API key इस्तेमाल करने के लिए voice फिर शुरू करें।"
         try:
             await websocket.send_json({
                 "type": "error",
@@ -755,6 +794,11 @@ async def voice_input(
                         continue
                     if stt_closed.is_set():
                         continue
+                    if assistant_busy.is_set():
+                        # The UI pauses capture while the assistant responds.
+                        # Drop any frames already in flight rather than
+                        # queueing speech that cannot be answered yet.
+                        continue
                     log_audio_boundary(
                         "Browser PCM -> FastAPI WebSocket -> Sarvam Realtime STT",
                         session_id,
@@ -777,21 +821,90 @@ async def voice_input(
                 # Track partial transcripts so an empty final transcript can
                 # tell attempted speech apart from VAD noise. ``nonlocal`` is
                 # required because the handler owns this timestamp.
-                nonlocal last_unkeyed_partial_at
+                nonlocal last_unkeyed_partial_at, fallback_unkeyed_final_pending
 
-                async for message in sarvam_ws:
+                while True:
+                    message = await stt_event_queue.get()
+                    if message is stt_stream_end:
+                        break
+                    if isinstance(message, BaseException):
+                        raise message
                     request_id = extract_request_id(message)
 
                     if message.event == "transcript.partial":
+                        raw_partial = getattr(message, "text", None)
                         log_text_boundary(
                             "Sarvam Realtime STT partial transcript",
                             session_id,
-                            getattr(message, "text", None),
+                            raw_partial,
                             request_id,
                             level=logging.DEBUG,
                         )
-                        if clean_transcript(getattr(message, "text", None)) is None:
+                        partial_text = clean_transcript(raw_partial)
+                        if partial_text is None:
                             continue
+                        utterance_idx = getattr(message, "utterance_idx", None)
+                        if (
+                            utterance_idx is not None
+                            and utterance_idx in processed_utterances
+                        ):
+                            continue
+                        if assistant_busy.is_set() or finalization_started.is_set():
+                            logger.debug(
+                                "Partial transcript ignored while response/finalization is active session_id=%s",
+                                session_id,
+                            )
+                            continue
+                        fallback_unkeyed_final_pending = False
+
+                        now = time.monotonic()
+                        request_id = request_id or None
+                        if utterance_idx is not None:
+                            if pending_partial["utterance_idx"] != utterance_idx:
+                                pending_partial.update({
+                                    "utterance_idx": utterance_idx,
+                                    "request_id": request_id,
+                                    "text": partial_text,
+                                    "changed_at": now,
+                                    "started_at": now,
+                                    "speech_ended_at": 0.0,
+                                })
+                            elif (
+                                partial_text != pending_partial["text"]
+                                or pending_partial["speech_ended_at"]
+                            ):
+                                pending_partial["text"] = partial_text
+                                pending_partial["changed_at"] = now
+                                pending_partial["speech_ended_at"] = 0.0
+                                pending_partial["request_id"] = (
+                                    request_id or pending_partial["request_id"]
+                                )
+                        elif (
+                            pending_partial["utterance_idx"] is not None
+                            or pending_partial["speech_ended_at"]
+                        ):
+                            pending_partial.update({
+                                "utterance_idx": None,
+                                "request_id": request_id,
+                                "text": partial_text,
+                                "changed_at": now,
+                                "started_at": now,
+                                "speech_ended_at": 0.0,
+                            })
+                        else:
+                            if not pending_partial["text"]:
+                                pending_partial["started_at"] = now
+                            if (
+                                partial_text != pending_partial["text"]
+                                or pending_partial["speech_ended_at"]
+                            ):
+                                pending_partial["text"] = partial_text
+                                pending_partial["changed_at"] = now
+                                pending_partial["speech_ended_at"] = 0.0
+                            pending_partial["request_id"] = (
+                                request_id or pending_partial["request_id"]
+                            )
+
                         if request_id:
                             partial_request_ids.add(request_id)
                             if len(partial_request_ids) > 256:
@@ -800,11 +913,36 @@ async def voice_input(
                             last_unkeyed_partial_at = time.monotonic()
                         await websocket.send_json({
                             "type": "partial_transcript",
-                            "text": message.text,
+                            "text": partial_text,
                             "request_id": request_id,
                         })
 
                     elif message.event == "transcript.final":
+                        utterance_idx = getattr(message, "utterance_idx", None)
+                        pending_matches = (
+                            pending_partial["utterance_idx"] == utterance_idx
+                            if utterance_idx is not None
+                            else bool(
+                                request_id
+                                and request_id == pending_partial["request_id"]
+                            )
+                            or (
+                                pending_partial["utterance_idx"] is None
+                                and not request_id
+                            )
+                        )
+                        stable_partial = pending_partial["text"] if pending_matches else ""
+                        if utterance_idx is not None:
+                            if utterance_idx in processed_utterances:
+                                logger.info(
+                                    "Duplicate final transcript ignored session_id=%s utterance_idx=%s",
+                                    session_id,
+                                    utterance_idx,
+                                )
+                                continue
+                            processed_utterances.add(utterance_idx)
+                            if len(processed_utterances) > 256:
+                                processed_utterances.pop()
                         raw_transcript = getattr(message, "text", None)
                         log_text_boundary(
                             "Sarvam Realtime STT final transcript",
@@ -813,6 +951,15 @@ async def voice_input(
                             request_id,
                         )
                         transcript = clean_transcript(raw_transcript)
+
+                        used_partial_fallback = transcript is None and bool(stable_partial)
+                        if used_partial_fallback:
+                            logger.warning(
+                                "Empty final transcript; using last stable partial session_id=%s utterance_idx=%s",
+                                session_id,
+                                utterance_idx if utterance_idx is not None else "unavailable",
+                            )
+                            transcript = stable_partial
 
                         if transcript is None:
                             # A final transcript with no usable text is only a
@@ -850,6 +997,53 @@ async def voice_input(
                                 )
                             continue
 
+                        synthetic_fallback = bool(
+                            getattr(message, "synthetic_fallback", False)
+                        )
+                        if not synthetic_fallback:
+                            now = time.monotonic()
+                            for fallback_id, expiry in tuple(fallback_request_ids.items()):
+                                if expiry <= now:
+                                    fallback_request_ids.pop(fallback_id, None)
+                            for fallback_idx, expiry in tuple(fallback_utterance_ids.items()):
+                                if expiry <= now:
+                                    fallback_utterance_ids.pop(fallback_idx, None)
+                            correlated_fallback = (
+                                bool(request_id and request_id in fallback_request_ids)
+                                or (
+                                    utterance_idx is not None
+                                    and utterance_idx in fallback_utterance_ids
+                                )
+                            )
+                            if correlated_fallback:
+                                logger.info(
+                                    "Late transcript correlated with finalized partial ignored session_id=%s request_id=%s utterance_idx=%s",
+                                    session_id,
+                                    request_id or "unavailable",
+                                    utterance_idx if utterance_idx is not None else "unavailable",
+                                )
+                                continue
+                            if (
+                                request_id is None
+                                and utterance_idx is None
+                                and fallback_unkeyed_final_pending
+                            ):
+                                fallback_unkeyed_final_pending = False
+                                logger.info(
+                                    "Uncorrelated late final after partial fallback ignored session_id=%s",
+                                    session_id,
+                                )
+                                continue
+                            fallback_expiry = fallback_transcripts.get(transcript, 0.0)
+                            if fallback_expiry > time.monotonic():
+                                logger.info(
+                                    "Late transcript matching a finalized partial ignored session_id=%s request_id=%s",
+                                    session_id,
+                                    request_id or "unavailable",
+                                )
+                                continue
+                            fallback_transcripts.pop(transcript, None)
+
                         if request_id and request_id in processed_request_ids:
                             logger.info(
                                 "Duplicate STT transcript skipped session_id=%s request_id=%s",
@@ -865,9 +1059,41 @@ async def voice_input(
                             processed_request_ids.add(request_id)
                             if len(processed_request_ids) > 256:
                                 processed_request_ids.pop()
+                        if (
+                            (synthetic_fallback or used_partial_fallback)
+                        ):
+                            now = time.monotonic()
+                            expiry = now + 30.0
+                            if request_id:
+                                fallback_request_ids[request_id] = expiry
+                            if utterance_idx is not None:
+                                fallback_utterance_ids[utterance_idx] = expiry
+                            if request_id is None and utterance_idx is None:
+                                fallback_unkeyed_final_pending = True
+                                fallback_transcripts[transcript] = expiry
+                            for fallback_text, expiry in tuple(fallback_transcripts.items()):
+                                if expiry <= now:
+                                    fallback_transcripts.pop(fallback_text, None)
+
+                        if pending_matches:
+                            pending_partial.update({
+                                "utterance_idx": None,
+                                "request_id": None,
+                                "text": "",
+                                "changed_at": 0.0,
+                                "started_at": 0.0,
+                                "speech_ended_at": 0.0,
+                            })
 
                         if not is_session_active(session_id):
                             logger.info("Session %s is already finalizing/completed. Ignoring new transcript.", session_id)
+                            continue
+
+                        if assistant_busy.is_set():
+                            logger.info(
+                                "STT transcript ignored while response is active session_id=%s",
+                                session_id,
+                            )
                             continue
 
                         log_text_boundary(
@@ -943,26 +1169,52 @@ async def voice_input(
                             await finalize_voice_call()
                             return
 
+                        assistant_busy.set()
                         await websocket.send_json({
                             "type": "assistant_start",
                             "transcript": transcript,
                             "request_id": request_id,
                         })
 
-                        if assistant_busy.is_set():
-                            logger.info(
-                                "STT transcript skipped while response is active session_id=%s",
-                                session_id,
-                            )
-                            continue
-
-                        assistant_busy.set()
                         turn_task = asyncio.create_task(
                             process_assistant_turn(transcript, request_id)
                         )
                         turn_tasks.add(turn_task)
                         turn_task.add_done_callback(turn_tasks.discard)
                         continue
+
+                    elif message.event in {
+                        "session.begin",
+                        "vad.speech_start",
+                        "vad.speech_end",
+                        "session.end",
+                    }:
+                        if message.event == "vad.speech_end" and pending_partial["text"]:
+                            utterance_idx = getattr(message, "utterance_idx", None)
+                            request_matches = (
+                                not request_id
+                                or not pending_partial["request_id"]
+                                or request_id == pending_partial["request_id"]
+                            )
+                            if (
+                                request_matches
+                                and (
+                                    utterance_idx is None
+                                    or utterance_idx == pending_partial["utterance_idx"]
+                                )
+                            ):
+                                speech_ended_at = time.monotonic()
+                                pending_partial["speech_ended_at"] = speech_ended_at
+                                pending_partial["changed_at"] = max(
+                                    pending_partial["changed_at"],
+                                    speech_ended_at,
+                                )
+                        logger.info(
+                            "Sarvam STT event session_id=%s event=%s utterance_idx=%s",
+                            session_id,
+                            message.event,
+                            getattr(message, "utterance_idx", "unavailable"),
+                        )
 
                     elif message.event == "error":
                         error_code = str(getattr(message, "code", "") or "")
@@ -995,8 +1247,80 @@ async def voice_input(
                 if not finalization_started.is_set():
                     stt_closed.set()
 
+            async def pump_stt_events():
+                """Decouple SDK events from the turn-completion watchdog."""
+                try:
+                    async for event in sarvam_ws:
+                        await stt_event_queue.put(event)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    await stt_event_queue.put(error)
+                finally:
+                    await stt_event_queue.put(stt_stream_end)
+
+            async def finalize_stale_partial():
+                """Complete a turn when Sarvam sends partials but no final.
+
+                This is a bounded recovery path for VAD that stays active on
+                room noise (or a final transcript that never arrives). It only
+                runs after the partial text has been stable for the grace
+                period, so live speech is not cut off prematurely.
+                """
+                while not stt_closed.is_set():
+                    await asyncio.sleep(VOICE_FINAL_WATCH_INTERVAL_SECONDS)
+                    if (
+                        stt_closed.is_set()
+                        or finalization_started.is_set()
+                        or assistant_busy.is_set()
+                    ):
+                        continue
+
+                    text = pending_partial["text"]
+                    if (
+                        not text
+                        or (
+                            pending_partial["utterance_idx"] is not None
+                            and pending_partial["utterance_idx"] in processed_utterances
+                        )
+                    ):
+                        continue
+
+                    now = time.monotonic()
+                    stable_for = now - pending_partial["changed_at"]
+                    utterance_age = now - pending_partial["started_at"]
+                    if (
+                        stable_for < VOICE_PARTIAL_FINAL_GRACE_SECONDS
+                        or (
+                            not pending_partial["speech_ended_at"]
+                            and utterance_age < VOICE_PARTIAL_MAX_UTTERANCE_SECONDS
+                        )
+                    ):
+                        continue
+
+                    pending_partial["text"] = ""
+                    pending_partial["changed_at"] = now
+                    utterance_idx = pending_partial["utterance_idx"]
+                    logger.warning(
+                        "No transcript.final after stable partial; finalizing last partial session_id=%s utterance_idx=%s text_length=%s",
+                        session_id,
+                        utterance_idx,
+                        len(text),
+                    )
+                    await stt_event_queue.put(
+                        SimpleNamespace(
+                            event="transcript.final",
+                            text=text,
+                            utterance_idx=utterance_idx,
+                            request_id=pending_partial["request_id"],
+                            synthetic_fallback=True,
+                        )
+                    )
+
             sender = asyncio.create_task(send_audio())
             receiver = asyncio.create_task(receive_transcript())
+            stt_pump = asyncio.create_task(pump_stt_events())
+            stale_final_watch = asyncio.create_task(finalize_stale_partial())
 
             try:
                 done, _ = await wait_for_voice_task_completion(
@@ -1028,12 +1352,16 @@ async def voice_input(
                 with anyio.CancelScope(shield=True):
                     sender.cancel()
                     receiver.cancel()
+                    stt_pump.cancel()
+                    stale_final_watch.cancel()
                     for turn_task in tuple(turn_tasks):
                         turn_task.cancel()
 
                     await asyncio.gather(
                         sender,
                         receiver,
+                        stt_pump,
+                        stale_final_watch,
                         *turn_tasks,
                         return_exceptions=True
                     )
@@ -1058,6 +1386,12 @@ async def voice_input(
             type(error).__name__,
         )
         if not stt_started:
+            failed_key = get_client_sarvam_api_key(client_id or session_id)
+            fallback_key = (
+                advance_client_sarvam_api_key(client_id or session_id, failed_key)
+                if failed_key and is_sarvam_credential_error(error)
+                else None
+            )
             code, message = _stt_failure_payload(
                 "",
                 str(error),
@@ -1068,9 +1402,29 @@ async def voice_input(
                     "type": "error",
                     "code": code,
                     "recoverable": True,
-                    "message": message,
+                    "message": (
+                        message + " दूसरी configured API key इस्तेमाल करने के लिए voice फिर शुरू करें।"
+                        if fallback_key
+                        else message
+                    ),
                 })
                 await websocket.close(code=1012, reason="Speech recognition unavailable")
+            except (RuntimeError, WebSocketDisconnect):
+                pass
+        elif not finalization_started.is_set():
+            # Never leave the browser stuck in Listening if the receiver or a
+            # turn handler fails unexpectedly after STT started.
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "voice_pipeline_failed",
+                    "recoverable": True,
+                    "message": (
+                        "I couldn't complete the voice response. Please try "
+                        "speaking again."
+                    ),
+                })
+                await websocket.close(code=1011, reason="Voice pipeline failed")
             except (RuntimeError, WebSocketDisconnect):
                 pass
     finally:

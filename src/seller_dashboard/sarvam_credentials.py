@@ -73,6 +73,7 @@ MASKED_KEY = "********"
 # Reentrant: consolidation may run while set_custom_sarvam_api_key holds the
 # lock, and must itself be atomic against concurrent saves.
 _LOCK = RLock()
+_CLIENT_KEY_INDEX: dict[str, int] = {}
 
 
 def credentials_path() -> Path:
@@ -217,16 +218,23 @@ def get_sarvam_api_key(path: Path | None = None) -> str | None:
     custom_key = _read_custom_key(path)
     if custom_key:
         return custom_key
-    env_key = os.getenv("SARVAM_API_KEY")
-    if env_key and env_key.strip():
-        return env_key.strip()
-    return None
+    return get_default_sarvam_api_key()
+
+
+def get_default_sarvam_api_keys() -> list[str]:
+    """Return configured deployment keys in priority order, without duplicates."""
+    keys = []
+    for name in ("SARVAM_API_KEY", "SARVAM_API_KEY_1", "SARVAM_API_KEY_2"):
+        value = os.getenv(name)
+        if value and value.strip() and value.strip() not in keys:
+            keys.append(value.strip())
+    return keys
 
 
 def get_default_sarvam_api_key() -> str | None:
-    """Return only the deployment-configured key, never a portal override."""
-    env_key = os.getenv("SARVAM_API_KEY")
-    return env_key.strip() if env_key and env_key.strip() else None
+    """Return the first deployment key, never a browser-profile override."""
+    keys = get_default_sarvam_api_keys()
+    return keys[0] if keys else None
 
 
 def _read_client_keys_at(path: Path) -> dict[str, dict[str, object]]:
@@ -297,6 +305,12 @@ def _write_client_keys_at(
 
 def get_client_sarvam_api_key(client_id: str) -> str | None:
     """Return this browser profile's override, falling back to deployment env."""
+    keys = get_client_sarvam_api_keys(client_id)
+    return keys[0] if keys else None
+
+
+def get_client_sarvam_api_keys(client_id: str) -> list[str]:
+    """Return this profile's custom key or its ordered deployment-key fallback."""
     normalized_client = (client_id or "").strip()
     if normalized_client:
         with _LOCK:
@@ -304,8 +318,62 @@ def get_client_sarvam_api_key(client_id: str) -> str | None:
         if saved:
             key = saved.get("api_key")
             if isinstance(key, str) and key.strip():
-                return key.strip()
-    return get_default_sarvam_api_key()
+                return [key.strip()]
+
+    keys = get_default_sarvam_api_keys()
+    if normalized_client and len(keys) > 1:
+        with _LOCK:
+            start = _CLIENT_KEY_INDEX.get(normalized_client, 0) % len(keys)
+        return keys[start:] + keys[:start]
+    return keys
+
+
+def is_sarvam_credential_error(error: BaseException) -> bool:
+    """Identify API-key rejection or exhausted-account errors without logging details."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    markers = (
+        "invalid api key",
+        "invalid_api_key",
+        "invalid subscription key",
+        "unauthorized",
+        "forbidden",
+        "quota",
+        "billing",
+        "credits exhausted",
+        "credit limit",
+        "payment_required",
+        "1003",
+    )
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = getattr(current, "status_code", None)
+        response = getattr(current, "response", None)
+        status = status or getattr(response, "status_code", None)
+        if status in {401, 402, 403}:
+            return True
+        message = f"{current} {getattr(current, 'code', '')}".lower()
+        if any(marker in message for marker in markers):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def advance_client_sarvam_api_key(client_id: str, failed_key: str) -> str | None:
+    """Prefer the next deployment key after an authentication/quota failure."""
+    normalized_client = (client_id or "").strip()
+    if not normalized_client:
+        return None
+    with _LOCK:
+        saved = _read_client_keys().get(normalized_client)
+        if saved and saved.get("api_key") == failed_key:
+            return None
+        keys = get_default_sarvam_api_keys()
+        if len(keys) < 2 or failed_key not in keys:
+            return None
+        next_index = (keys.index(failed_key) + 1) % len(keys)
+        _CLIENT_KEY_INDEX[normalized_client] = next_index
+        return keys[next_index]
 
 
 def get_client_sarvam_key_status(client_id: str) -> dict:
@@ -341,6 +409,7 @@ def set_client_sarvam_api_key(client_id: str, api_key: str) -> dict:
             }
         else:
             client_keys.pop(normalized_client, None)
+        _CLIENT_KEY_INDEX.pop(normalized_client, None)
 
         primary = credentials_path()
         try:
@@ -356,7 +425,7 @@ def set_client_sarvam_api_key(client_id: str, api_key: str) -> dict:
 def get_sarvam_key_status(path: Path | None = None) -> dict:
     """Return non-sensitive key status for the settings UI."""
     custom_key = _read_custom_key(path)
-    env_key = os.getenv("SARVAM_API_KEY")
+    env_key = get_default_sarvam_api_key()
     if custom_key:
         source = "custom"
     elif env_key and env_key.strip():
@@ -457,8 +526,7 @@ def build_sarvam_client_report(
 ) -> dict:
     """Build a key-free report describing which clients use the active key."""
     custom_key = _read_custom_key()
-    env_key = os.getenv("SARVAM_API_KEY")
-    env_key = env_key.strip() if isinstance(env_key, str) and env_key.strip() else None
+    env_keys = get_default_sarvam_api_keys()
     report: dict[str, dict] = {}
     stale_clients = []
     unknown_clients = []
@@ -478,7 +546,9 @@ def build_sarvam_client_report(
         client_key = _read_client_key(client)
         if client_key and custom_key and hmac.compare_digest(client_key, custom_key):
             key_source = "custom"
-        elif client_key and env_key and hmac.compare_digest(client_key, env_key):
+        elif client_key and any(
+            hmac.compare_digest(client_key, env_key) for env_key in env_keys
+        ):
             key_source = "environment"
         else:
             key_source = "unknown"

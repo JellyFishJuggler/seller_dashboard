@@ -22,7 +22,11 @@ tests/*
 !tests/test_voice_resilience.py
 !tests/test_summary_storage.py
 !tests/test_sarvam_profile_keys.py
+!tests/test_diagnostic_context.py
 temp.py
 files/knowledge_base
 private/
 closure_test_*/
+.e2e/
+.e2e_fake_mic.js
+.probe_*.py

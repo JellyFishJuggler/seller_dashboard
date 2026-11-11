@@ -11,8 +11,11 @@ from seller_dashboard.bot import (
 )
 from seller_dashboard.assistant_style import ensure_hindi_response
 from seller_dashboard.sarvam_credentials import (
+    advance_client_sarvam_api_key,
     get_client_sarvam_api_key,
+    get_client_sarvam_api_keys,
     get_default_sarvam_api_key,
+    is_sarvam_credential_error,
 )
 from seller_dashboard.voice_diagnostics import (
     EmptyAssistantResponseError,
@@ -131,20 +134,37 @@ class VoiceAssistant:
         log_text_boundary("Sarvam TTS input", session_id, text)
 
         try:
-            api_key = get_client_sarvam_api_key(client_id or session_id)
-            if not api_key:
+            profile_id = client_id or session_id
+            api_keys = get_client_sarvam_api_keys(profile_id)
+            if not api_keys:
                 raise ValueError("No Sarvam API key is configured for this session.")
-            tts_client = (
-                self.tts_client
-                if not hasattr(self, "_api_key") or api_key == self._api_key
-                else SarvamAI(api_subscription_key=api_key)
-            )
-            audio = tts_client.text_to_speech.convert(
-                text=text.strip(),
-                model="bulbul:v4-flash",
-                language_code="hi-IN",
-                speaker=TTS_SPEAKER,
-            )
+            for key_index, api_key in enumerate(api_keys):
+                tts_client = (
+                    self.tts_client
+                    if not hasattr(self, "_api_key") or api_key == self._api_key
+                    else SarvamAI(api_subscription_key=api_key)
+                )
+                try:
+                    audio = tts_client.text_to_speech.convert(
+                        text=text.strip(),
+                        model="bulbul:v4-flash",
+                        language_code="hi-IN",
+                        speaker=TTS_SPEAKER,
+                    )
+                    break
+                except Exception as error:
+                    if (
+                        not is_sarvam_credential_error(error)
+                        or key_index == len(api_keys) - 1
+                    ):
+                        raise
+                    advance_client_sarvam_api_key(profile_id, api_key)
+                    logger.warning(
+                        "Sarvam TTS key failed; trying configured fallback session_id=%s key_slot=%s error_type=%s",
+                        session_id,
+                        key_index + 2,
+                        type(error).__name__,
+                    )
         except Exception as error:
             log_text_boundary(
                 "Sarvam TTS error",

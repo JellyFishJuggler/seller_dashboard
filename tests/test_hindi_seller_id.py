@@ -92,6 +92,17 @@ class HindiSellerIdentificationTests(unittest.TestCase):
         config = {"configurable": {"thread_id": thread_id, "voice_mode": True}}
         with (
             patch.object(bot, "llm", FakeModel()),
+            patch.object(bot, "_llm_key", "unit-test-key"),
+            patch.object(
+                bot,
+                "get_client_sarvam_api_key",
+                return_value="unit-test-key",
+            ),
+            patch.object(
+                bot,
+                "get_client_sarvam_api_keys",
+                return_value=["unit-test-key"],
+            ),
             patch.object(bot, "_rag_retriever", EmptyRetriever()),
         ):
             graph = bot.build_graph()
@@ -130,6 +141,17 @@ class HindiSellerIdentificationTests(unittest.TestCase):
 
         with (
             patch.object(bot, "llm", UnusedModel()),
+            patch.object(bot, "_llm_key", "unit-test-key"),
+            patch.object(
+                bot,
+                "get_client_sarvam_api_key",
+                return_value="unit-test-key",
+            ),
+            patch.object(
+                bot,
+                "get_client_sarvam_api_keys",
+                return_value=["unit-test-key"],
+            ),
             patch.object(bot, "_rag_retriever", EmptyRetriever()),
         ):
             graph = bot.build_graph()
@@ -167,8 +189,11 @@ class HindiSellerIdentificationTests(unittest.TestCase):
         self.assertEqual(breakdown["seller_id"], "SD-12345")
         self.assertEqual(breakdown["reason_source"], "seller_records")
         self.assertIn("seller's product-level records", breakdown["note"])
-        self.assertIn("Never call tool-provided figures", bot.SYSTEM_PROMPT)
-        self.assertIn("do not call them mock", bot.SYSTEM_PROMPT)
+        self.assertIn(
+            "Treat seller profiles and all values returned by seller tools as the seller's account data",
+            bot.SYSTEM_PROMPT,
+        )
+        self.assertNotIn("mock", bot.SYSTEM_PROMPT.lower())
 
 
 if __name__ == "__main__":

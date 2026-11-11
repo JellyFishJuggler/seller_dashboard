@@ -83,13 +83,22 @@ delays. Try them all to see how the advice changes.
 
 ## Getting started
 
+The assistant's API is already hosted — just open `src/frontend/index.html`
+in your browser, enter a seller ID (for example `SD-48213`), press
+**Load**, and tap the mic to start talking.
+
+Prefer running the API yourself?
+
 ```bash
 uv sync
 uv run uvicorn seller_dashboard.api:app --reload
 ```
 
-Then open `src/frontend/index.html` in your browser, enter a seller ID
-(for example `SD-48213`), press **Load**, and tap the mic to start talking.
+Then point the portal at your local API from the browser console:
+
+```js
+localStorage.setItem('seller-assistant-api-url', 'http://127.0.0.1:8000');
+```
 
 > **Note:** the seller numbers in this demo are illustrative mock data and
 > are clearly marked as assumed — perfect for trying the assistant, but

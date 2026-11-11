@@ -1,4 +1,4 @@
-const API_URL = localStorage.getItem('seller-assistant-api-url') || 'http://127.0.0.1:8000';
+const API_URL = localStorage.getItem('seller-assistant-api-url') || 'https://seller-dashboard-b7uw.onrender.com';
 const conversation = document.querySelector('#conversation');
 const newChatButton = document.querySelector('#new-chat');
 const voiceBar = document.querySelector('.voice-bar');

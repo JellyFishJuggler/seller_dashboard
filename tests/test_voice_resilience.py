@@ -413,7 +413,7 @@ class VoiceResilienceTests(unittest.TestCase):
                 async def messages():
                     yield SimpleNamespace(
                         event="error",
-                        code="1003",
+                        code="invalid_subscription_key",
                         message="Invalid subscription key",
                         is_fatal=True,
                     )

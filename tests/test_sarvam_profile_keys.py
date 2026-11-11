@@ -51,6 +51,11 @@ class SarvamBrowserProfileKeyTests(unittest.TestCase):
             )
             self.assertTrue(
                 sarvam_credentials.is_sarvam_credential_error(
+                    RuntimeError("invalid_subscription_key")
+                )
+            )
+            self.assertTrue(
+                sarvam_credentials.is_sarvam_credential_error(
                     RuntimeError("quota exceeded")
                 )
             )

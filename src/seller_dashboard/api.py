@@ -373,6 +373,7 @@ _STT_AUTH_MARKERS = (
     "unauthorized",
     "invalid_api_key",
     "invalid api key",
+    "invalid_subscription_key",
     "invalid subscription key",
     "1003",
     "authentication",

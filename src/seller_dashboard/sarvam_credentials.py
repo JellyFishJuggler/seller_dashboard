@@ -335,6 +335,7 @@ def is_sarvam_credential_error(error: BaseException) -> bool:
     markers = (
         "invalid api key",
         "invalid_api_key",
+        "invalid_subscription_key",
         "invalid subscription key",
         "unauthorized",
         "forbidden",
